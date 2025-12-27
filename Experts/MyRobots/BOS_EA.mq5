@@ -26,6 +26,13 @@ enum TRADE_DIRECTION
 //+------------------------------------------------------------------+
 //| Input Parameters                                                  |
 //+------------------------------------------------------------------+
+input group "=== Account Info ==="
+input bool            InpEnableEvaluation = true;  // Enable Prop Firm Evaluation Mode
+input double          InpInitialBalance = 10000.0; // Initial account balance for calculations
+input double          InpDailyLossLimitPct = 5.0;   // Daily loss limit percentage
+input double          InpMaxLossLimitPct = 10.0;    // Maximum loss limit percentage
+input double          iInpProfitTargetPct = 10.0;   // Daily profit target percentage
+
 input group "=== Timeframe Settings ==="
 input ENUM_TIMEFRAMES InpHighTF = PERIOD_H4;      // High Timeframe for swing points
 input ENUM_TIMEFRAMES InpLowTF = PERIOD_M15;      // Low Timeframe for BOS detection
@@ -34,6 +41,7 @@ input int             InpSwingRightBars = 5;      // Swing detection right bars
 
 input group "=== Entry Settings ==="
 input TRADE_DIRECTION InpTradeDirection = TRADE_BOTH; // Allowed trade direction
+input bool            InpEnableSupertrend = true; // Enable trade by HTF trend
 input int             InpPullbackPoints = 50;     // Min pullback points to BOS level
 input int             InpBOSConfirmBars = 2;      // BOS confirmation bars
 
@@ -109,6 +117,11 @@ TREND_TYPE        htfTrend = TREND_NEUTRAL;
 bool              waitingForPullback = false;
 bool              lastHTFSwingWasHigh = false;
 
+// Account tracking
+double            dailyStartBalance = 0.0;
+datetime          currentDay = 0;
+bool              dailyResetDone = false;
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
@@ -119,10 +132,15 @@ int OnInit()
    trade.SetDeviationInPoints(50);
    trade.SetTypeFilling(ORDER_FILLING_FOK);
    trade.SetAsyncMode(false);
+   trade.LogLevel(LOG_LEVEL_NO); // Only log errors, not every trade operation
    
    // Initialize symbol info
    symbolInfo.Name(_Symbol);
    symbolInfo.Refresh();
+   
+   // Initialize daily balance tracking
+   dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   currentDay = TimeCurrent();
    
    // Initialize swing points
    InitSwingPoints();
@@ -161,6 +179,14 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   // Check for daily reset at 23:55 (only in evaluation mode)
+   if(InpEnableEvaluation)
+      CheckDailyReset();
+   
+   // Check account limits when there are open positions (only in evaluation mode)
+   if(InpEnableEvaluation && GetOpenPositionsCount() > 0)
+      CheckAccountLimits();
+   
    // Apply trailing stop on every tick if enabled
    if(InpUseTrailingStop)
       ApplyTrailingStop();
@@ -175,6 +201,9 @@ void OnTick()
    // Update analysis
    AnalyzeHighTimeframe();
    AnalyzeLowTimeframe();
+   
+   // Draw LTF swing labels
+   DrawLTFSwingLabels();
    
    // Determine HTF trend
    DetermineHTFTrend();
@@ -264,7 +293,7 @@ void AnalyzeHighTimeframe()
    tempPrevLow.isValid = false;
    
    // Search for swing highs
-   for(int i = InpSwingRightBars/2; i < lookback && foundHighs < 2; i++)
+   for(int i = InpSwingRightBars; i < lookback && foundHighs < 2; i++)
    {
       if(IsSwingHigh(i, InpHighTF))
       {
@@ -545,52 +574,100 @@ void DetermineHTFTrend()
 //+------------------------------------------------------------------+
 void CheckForBOS()
 {
-   // Do not trade during sideways/neutral market
-   if(htfTrend == TREND_NEUTRAL)
-      return;
-   
    if(!ltfLastHigh.isValid || !ltfLastLow.isValid)
       return;
    
    double currentClose = iClose(_Symbol, InpLowTF, 0);
    
-   // If last HTF swing was HIGH, look for BEARISH BOS (reversal)
-   if(lastHTFSwingWasHigh && htfTrend == TREND_BEARISH && InpTradeDirection != TRADE_BUY_ONLY)
+   // When InpEnableSupertrend is enabled
+   if(InpEnableSupertrend)
    {
-      // Bearish BOS: Price breaks below previous swing low
-      if(ltfPrevLow.isValid)
+      // Block trades when trend is neutral
+      if(htfTrend == TREND_NEUTRAL)
+         return;
+      
+      // Check for BEARISH BOS when trend is bearish
+      if(htfTrend == TREND_BEARISH && InpTradeDirection != TRADE_BUY_ONLY)
       {
-         if(currentClose < ltfPrevLow.price && !currentBOS.isActive)
+         // Bearish BOS: Price breaks below most recent swing low
+         if(ltfLastLow.isValid)
          {
-            currentBOS.price = ltfPrevLow.price;
-            currentBOS.time = TimeCurrent();
-            currentBOS.isBullish = false;
-            currentBOS.isActive = true;
-            currentBOS.barIndex = 0;
-            waitingForPullback = true;
-            
-            Print("Bearish BOS detected at ", currentBOS.price, " (Last HTF swing was HIGH)");
-            DrawBOSLevel(currentBOS.price, currentBOS.time);
+            if(currentClose < ltfLastLow.price && !currentBOS.isActive)
+            {
+               currentBOS.price = ltfLastLow.price;
+               currentBOS.time = TimeCurrent();
+               currentBOS.isBullish = false;
+               currentBOS.isActive = true;
+               currentBOS.barIndex = 0;
+               waitingForPullback = true;
+               
+               Print("Bearish BOS detected at ", currentBOS.price, " (HTF Trend: BEARISH)");
+               DrawBOSLevel(currentBOS.price, currentBOS.time, false);
+            }
+         }
+      }
+      // Check for BULLISH BOS when trend is bullish
+      else if(htfTrend == TREND_BULLISH && InpTradeDirection != TRADE_SELL_ONLY)
+      {
+         // Bullish BOS: Price breaks above most recent swing high
+         if(ltfLastHigh.isValid)
+         {
+            if(currentClose > ltfLastHigh.price && !currentBOS.isActive)
+            {
+               currentBOS.price = ltfLastHigh.price;
+               currentBOS.time = TimeCurrent();
+               currentBOS.isBullish = true;
+               currentBOS.isActive = true;
+               currentBOS.barIndex = 0;
+               waitingForPullback = true;
+               
+               Print("Bullish BOS detected at ", currentBOS.price, " (HTF Trend: BULLISH)");
+               DrawBOSLevel(currentBOS.price, currentBOS.time);
+            }
          }
       }
    }
-   // If last HTF swing was LOW, look for BULLISH BOS (reversal)
-   else if(!lastHTFSwingWasHigh && htfTrend == TREND_BULLISH && InpTradeDirection != TRADE_SELL_ONLY)
+   // When InpEnableSupertrend is disabled - BOS follows last HTF swing point
+   else
    {
-      // Bullish BOS: Price breaks above previous swing high
-      if(ltfPrevHigh.isValid)
+      // If last HTF swing was HIGH, look for BEARISH BOS
+      if(lastHTFSwingWasHigh && InpTradeDirection != TRADE_BUY_ONLY)
       {
-         if(currentClose > ltfPrevHigh.price && !currentBOS.isActive)
+         // Bearish BOS: Price breaks below most recent swing low
+         if(ltfLastLow.isValid)
          {
-            currentBOS.price = ltfPrevHigh.price;
-            currentBOS.time = TimeCurrent();
-            currentBOS.isBullish = true;
-            currentBOS.isActive = true;
-            currentBOS.barIndex = 0;
-            waitingForPullback = true;
-            
-            Print("Bullish BOS detected at ", currentBOS.price, " (Last HTF swing was LOW)");
-            DrawBOSLevel(currentBOS.price, currentBOS.time);
+            if(currentClose < ltfLastLow.price && !currentBOS.isActive)
+            {
+               currentBOS.price = ltfLastLow.price;
+               currentBOS.time = TimeCurrent();
+               currentBOS.isBullish = false;
+               currentBOS.isActive = true;
+               currentBOS.barIndex = 0;
+               waitingForPullback = true;
+               
+               Print("Bearish BOS detected at ", currentBOS.price, " (Last HTF swing was HIGH)");
+               DrawBOSLevel(currentBOS.price, currentBOS.time, false);
+            }
+         }
+      }
+      // If last HTF swing was LOW, look for BULLISH BOS
+      else if(!lastHTFSwingWasHigh && InpTradeDirection != TRADE_SELL_ONLY)
+      {
+         // Bullish BOS: Price breaks above most recent swing high
+         if(ltfLastHigh.isValid)
+         {
+            if(currentClose > ltfLastHigh.price && !currentBOS.isActive)
+            {
+               currentBOS.price = ltfLastHigh.price;
+               currentBOS.time = TimeCurrent();
+               currentBOS.isBullish = true;
+               currentBOS.isActive = true;
+               currentBOS.barIndex = 0;
+               waitingForPullback = true;
+               
+               Print("Bullish BOS detected at ", currentBOS.price, " (Last HTF swing was LOW)");
+               DrawBOSLevel(currentBOS.price, currentBOS.time);
+            }
          }
       }
    }
@@ -605,9 +682,16 @@ void CheckForEntry()
    double point = _Point;
    int minPullback = InpPullbackPoints;
    
+   // Determine if trend check is required
+   bool checkTrend = InpEnableSupertrend;
+   
    // Bullish entry: Wait for pullback to BOS level
-   if(currentBOS.isBullish && htfTrend == TREND_BULLISH && waitingForPullback)
+   if(currentBOS.isBullish && waitingForPullback)
    {
+      // Check trend alignment if supertrend filter is enabled
+      if(checkTrend && htfTrend != TREND_BULLISH)
+         return;
+      
       // Check trade direction filter
       if(InpTradeDirection == TRADE_SELL_ONLY)
          return;
@@ -642,8 +726,12 @@ void CheckForEntry()
    }
    
    // Bearish entry: Wait for pullback to BOS level
-   else if(!currentBOS.isBullish && htfTrend == TREND_BEARISH && waitingForPullback)
+   else if(!currentBOS.isBullish && waitingForPullback)
    {
+      // Check trend alignment if supertrend filter is enabled
+      if(checkTrend && htfTrend != TREND_BEARISH)
+         return;
+      
       // Check trade direction filter
       if(InpTradeDirection == TRADE_BUY_ONLY)
          return;
@@ -696,7 +784,16 @@ void ExecuteBuyTrade()
    }
    else
    {
-      sl = htfLastLow.isValid ? htfLastLow.price - 1000 * _Point : ask - 200 * _Point;
+      // Use HTF last low as SL if valid and below entry
+      if(htfLastLow.isValid && htfLastLow.price < ask)
+      {
+         sl = NormalizeDouble(htfLastLow.price - 100 * _Point, _Digits);
+      }
+      else
+      {
+         Print("Warning: HTF last low invalid or too close. Using 100 pips default SL.");
+         sl = ask - 100 * pipSize;
+      }
    }
    
    // Use input TP if specified, otherwise use automatic from swing points
@@ -738,12 +835,12 @@ void ExecuteBuyTrade()
       // Try to use HTF swing high as TP target
       if(htfPrevHigh.isValid)
       {
-         tp = htfPrevHigh.price - 200 * _Point;
+         tp = htfPrevHigh.price - 50 * _Point;
          // Validate: TP must be above entry price for BUY
          if(tp <= ask)
          {
-            Print("Warning: HTF previous high (", htfPrevHigh.price, ") is at or below entry price. Using default 2000 pips TP.");
-            tp = ask + 2000 * pipSize;
+            Print("Warning: HTF previous high (", htfPrevHigh.price, ") is at or below entry price. Using default 50 pips TP.");
+            tp = ask + 50 * pipSize;
          }
       }
       else
@@ -791,7 +888,16 @@ void ExecuteSellTrade()
    }
    else
    {
-      sl = htfLastHigh.isValid ? htfLastHigh.price + 2000 * _Point : bid + 200 * _Point;
+      // Use HTF last high as SL if valid and above entry
+      if(htfLastHigh.isValid && htfLastHigh.price > bid)
+      {
+         sl = NormalizeDouble(htfLastHigh.price + 100 * _Point, _Digits);
+      }
+      else
+      {
+         Print("Warning: HTF last high invalid or too close. Using 100 pips default SL.");
+         sl = bid + 100 * pipSize;
+      }
    }
    
    // Use input TP if specified, otherwise use automatic from swing points
@@ -832,12 +938,12 @@ void ExecuteSellTrade()
       // }
       if(htfPrevLow.isValid)
       {
-         tp = htfPrevLow.price + 200 * _Point;
+         tp = htfPrevLow.price + 50 * _Point;
          // Validate: TP must be below entry price for SELL
          if(tp >= bid)
          {
-            Print("Warning: HTF previous low (", htfPrevLow.price, ") is at or above entry price. Using default 2000 pips TP.");
-            tp = bid - 2000 * pipSize;
+            Print("Warning: HTF previous low (", htfPrevLow.price, ") is at or above entry price. Using default 50 pips TP.");
+            tp = bid - 50 * pipSize;
          }
       }
       else
@@ -936,9 +1042,9 @@ double CalculateLotSize(double entryPrice, double stopLoss)
 //+------------------------------------------------------------------+
 void ApplyTrailingStop()
 {
-   double pipSize = (_Digits == 5 || _Digits == 3) ? 10 * _Point : _Point;
-   double trailDistance = InpTrailingStop * pipSize;
-   double trailStep = InpTrailingStep * pipSize;
+   // double pipSize = (_Digits == 5 || _Digits == 3) ? 10 * _Point : _Point;
+   double trailDistance = InpTrailingStop * _Point;
+   double trailStep = InpTrailingStep * _Point;
    
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -958,6 +1064,9 @@ void ApplyTrailingStop()
       double currentPrice = (posType == POSITION_TYPE_BUY) ? 
                             SymbolInfoDouble(_Symbol, SYMBOL_BID) : 
                             SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double tickSize=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+
+      bool isProfitable = (posType == POSITION_TYPE_BUY) ? (currentPrice > posOpenPrice) : (currentPrice < posOpenPrice);
       
       double newSL = 0;
       bool needUpdate = false;
@@ -970,7 +1079,14 @@ void ApplyTrailingStop()
          if(trailingStarted)
          {
             // Apply normal trailing stop
-            newSL = currentPrice - trailDistance;
+            newSL = NormalizeDouble(currentPrice - trailDistance, _Digits);
+            newSL = NormalizeDouble(MathRound(newSL / tickSize) * tickSize, _Digits);
+            
+            // Validate: new SL must be below current price and above entry
+            if(newSL >= currentPrice)
+            {
+               continue; // Skip invalid SL
+            }
             
             // Check if we should update (price moved enough and new SL is better)
             if(posSL == 0 || (newSL > posSL && (newSL - posSL) >= trailStep))
@@ -983,13 +1099,22 @@ void ApplyTrailingStop()
             // Trailing not started yet - update SL to htfLastLow if it's better
             if(htfLastLow.isValid)
             {
-               newSL = htfLastLow.price - 1000 * _Point;
-               
-               // Only update if new SL is better (higher) than current SL
-               if(posSL == 0 || newSL > posSL)
+               trailingStarted = isProfitable && (currentPrice - posOpenPrice) >= trailDistance;
+
+               if(trailingStarted)
                {
-                  needUpdate = true;
-                  Print("Updating BUY SL to HTF Last Low (trailing not started): ", newSL);
+                  // Apply normal trailing stop
+                  newSL = NormalizeDouble(currentPrice - trailDistance, _Digits);
+                  newSL = NormalizeDouble(MathRound(newSL / tickSize) * tickSize, _Digits);               
+                  // Only update if new SL is better (higher) than current SL and moved enough
+                  if(posSL == 0 || (newSL > posSL && (newSL - posSL) >= trailStep))
+                  {
+                     needUpdate = true;
+                  }
+               }
+               else
+               {
+                  newSL = NormalizeDouble(htfLastLow.price - 50 * _Point, _Digits);
                }
             }
          }
@@ -1002,7 +1127,8 @@ void ApplyTrailingStop()
          if(trailingStarted)
          {
             // Apply normal trailing stop
-            newSL = currentPrice + trailDistance;
+            newSL = NormalizeDouble(currentPrice + trailDistance, _Digits);
+            newSL = NormalizeDouble(MathRound(newSL / tickSize) * tickSize, _Digits);
             
             // Check if we should update (price moved enough and new SL is better)
             if(posSL == 0 || (newSL < posSL && (posSL - newSL) >= trailStep))
@@ -1015,13 +1141,22 @@ void ApplyTrailingStop()
             // Trailing not started yet - update SL to htfLastHigh if it's better
             if(htfLastHigh.isValid)
             {
-               newSL = htfLastHigh.price + 2000 * _Point;
-               
-               // Only update if new SL is better (lower) than current SL
-               if(posSL == 0 || newSL < posSL)
+               trailingStarted = isProfitable && (posOpenPrice - currentPrice) >= trailDistance;
+
+               if(trailingStarted)
                {
-                  needUpdate = true;
-                  Print("Updating SELL SL to HTF Last High (trailing not started): ", newSL);
+                  // Apply normal trailing stop
+                  newSL = NormalizeDouble(currentPrice + trailDistance, _Digits);
+                  newSL = NormalizeDouble(MathRound(newSL / tickSize) * tickSize, _Digits);               
+                  // Only update if new SL is better (lower) than current SL and moved enough
+                  if(posSL == 0 || (newSL < posSL && (posSL - newSL) >= trailStep))
+                  {
+                     needUpdate = true;
+                  }
+               }
+               else
+               {
+                  newSL = NormalizeDouble(htfLastHigh.price + 50 * _Point, _Digits);
                }
             }
          }
@@ -1031,13 +1166,31 @@ void ApplyTrailingStop()
       {
          newSL = NormalizeDouble(newSL, _Digits);
          
+         // Get broker's minimum stop level
+         double minStopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+         double currentPriceForCheck = (posType == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         
+         // Validate minimum distance from current price
+         if((posType == POSITION_TYPE_BUY && (currentPriceForCheck - newSL) < minStopLevel) ||
+            (posType == POSITION_TYPE_SELL && (newSL - currentPriceForCheck) < minStopLevel))
+         {
+            Print("Warning: New SL too close to market. MinStopLevel: ", minStopLevel, " | Distance: ", 
+                  (posType == POSITION_TYPE_BUY ? currentPriceForCheck - newSL : newSL - currentPriceForCheck));
+            continue;
+         }
+         
          if(trade.PositionModify(ticket, newSL, posTP))
          {
-            Print("Trailing stop updated for #", ticket, " | New SL: ", newSL);
+            // Position modified successfully
          }
          else
          {
-            Print("Failed to modify position #", ticket, ". Error: ", GetLastError());
+            int errorCode = GetLastError();
+            Print("Failed to modify position #", ticket, ". Error: ", errorCode,
+                  " | Current Price: ", currentPriceForCheck,
+                  " | Old SL: ", posSL,
+                  " | New SL: ", newSL,
+                  " | TP: ", posTP);
          }
       }
    }
@@ -1073,15 +1226,16 @@ void CloseAllPositions(ENUM_POSITION_TYPE posType)
 //+------------------------------------------------------------------+
 //| Draw BOS Level on Chart                                          |
 //+------------------------------------------------------------------+
-void DrawBOSLevel(double price, datetime time)
+void DrawBOSLevel(double price, datetime time, bool isBullish=true)
 {
-   string objName = "BOS_Level";
+   string str = isBullish ? "BULLISH" : "BEARISH";
+   string objName = str+"\nBOS_Level";
    //--- set time1 and time2 for trend line
    datetime currentTime = TimeCurrent();
    //--- set time1 to previous 5 bars from BOS detection
    datetime time1 = time - 5 * PeriodSeconds(PERIOD_CURRENT);
    //--- set time2 to 5 bars ahead of current time
-   datetime time2 = currentTime + 5 * PeriodSeconds(PERIOD_CURRENT);
+   datetime time2 = currentTime + 10 * PeriodSeconds(PERIOD_CURRENT);
 
    //--- Delete old object if exists to redraw at new level
    if(ObjectFind(0, objName) >= 0) {
@@ -1089,9 +1243,13 @@ void DrawBOSLevel(double price, datetime time)
    }
    //--- Create trend line object
    ObjectCreate(0, objName, OBJ_TREND, 0, time1, price, time2, price);
-   ObjectSetInteger(0, objName, OBJPROP_COLOR, clrDarkGoldenrod);
+   ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+   if(isBullish)
+      ObjectSetInteger(0, objName, OBJPROP_COLOR, clrDodgerBlue);
+   else
+      ObjectSetInteger(0, objName, OBJPROP_COLOR, clrDarkOrange);
    ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_DASH);
-   ObjectSetInteger(0, objName, OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, objName, OBJPROP_WIDTH, 3);
    ObjectSetInteger(0, objName, OBJPROP_RAY_RIGHT, false); 
 }
 
@@ -1100,7 +1258,8 @@ void DrawBOSLevel(double price, datetime time)
 //+------------------------------------------------------------------+
 bool ExtendBOSLevel(datetime time, double price)
 {
-   string objName = "BOS_Level";
+   string str = currentBOS.isBullish ? "BULLISH" : "BEARISH";
+   string objName = str+"\nBOS_Level";
    datetime extend_time = time + 10 * PeriodSeconds(PERIOD_CURRENT);
 //--- reset the error value
    ResetLastError();
@@ -1113,6 +1272,48 @@ bool ExtendBOSLevel(datetime time, double price)
      }
 //--- successful execution
    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Draw LTF Swing Labels                                            |
+//+------------------------------------------------------------------+
+void DrawLTFSwingLabels()
+{
+   // Draw label for LTF Last High (SH)
+   if(ltfLastHigh.isValid)
+   {
+      string objName = "BOS_LTF_SH";
+      
+      if(ObjectFind(0, objName) >= 0)
+         ObjectDelete(0, objName);
+      
+      if(ObjectCreate(0, objName, OBJ_TEXT, 0, ltfLastHigh.time, ltfLastHigh.price))
+      {
+         ObjectSetString(0, objName, OBJPROP_TEXT, "SH");
+         ObjectSetInteger(0, objName, OBJPROP_COLOR, clrOrangeRed);
+         ObjectSetInteger(0, objName, OBJPROP_FONTSIZE, 8);
+         ObjectSetInteger(0, objName, OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
+         ObjectSetString(0, objName, OBJPROP_TOOLTIP, "LTF Swing High @ " + DoubleToString(ltfLastHigh.price, _Digits));
+      }
+   }
+   
+   // Draw label for LTF Last Low (SL)
+   if(ltfLastLow.isValid)
+   {
+      string objName = "BOS_LTF_SL";
+      
+      if(ObjectFind(0, objName) >= 0)
+         ObjectDelete(0, objName);
+      
+      if(ObjectCreate(0, objName, OBJ_TEXT, 0, ltfLastLow.time, ltfLastLow.price))
+      {
+         ObjectSetString(0, objName, OBJPROP_TEXT, "SL");
+         ObjectSetInteger(0, objName, OBJPROP_COLOR, clrAqua);
+         ObjectSetInteger(0, objName, OBJPROP_FONTSIZE, 8);
+         ObjectSetInteger(0, objName, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
+         ObjectSetString(0, objName, OBJPROP_TOOLTIP, "LTF Swing Low @ " + DoubleToString(ltfLastLow.price, _Digits));
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -1161,15 +1362,132 @@ void DrawSwingPoints(string name, ENUM_TIMEFRAMES tf, SwingPoint &lastPoint, ENU
 }
 
 //+------------------------------------------------------------------+
+//| Check for daily reset at 23:55                                   |
+//+------------------------------------------------------------------+
+void CheckDailyReset()
+{
+   MqlDateTime currentTime;
+   TimeToStruct(TimeCurrent(), currentTime);
+   
+   // Check if it's 23:55
+   if(currentTime.hour == 23 && currentTime.min == 55)
+   {
+      if(!dailyResetDone)
+      {
+         double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+         double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+         
+         // Set daily start balance to the higher of equity or balance
+         if(currentEquity > currentBalance)
+         {
+            dailyStartBalance = currentEquity;
+            Print("Daily reset at 23:55 - Using Equity: ", DoubleToString(dailyStartBalance, 2));
+         }
+         else
+         {
+            dailyStartBalance = currentBalance;
+            Print("Daily reset at 23:55 - Using Balance: ", DoubleToString(dailyStartBalance, 2));
+         }
+         
+         currentDay = TimeCurrent();
+         dailyResetDone = true;
+      }
+   }
+   else
+   {
+      // Reset flag when time is no longer 23:55
+      dailyResetDone = false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check account limits and close positions if needed               |
+//+------------------------------------------------------------------+
+void CheckAccountLimits()
+{
+   double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   
+   // Calculate P&L from initial balance
+   double totalPnL = currentBalance - InpInitialBalance;
+   double dailyPnL = currentBalance - dailyStartBalance;
+   
+   // Calculate floating P&L (including open positions)
+   double floatingPnL = currentEquity - currentBalance;
+   double dailyPnLWithFloating = currentEquity - dailyStartBalance;
+   
+   // Calculate limits
+   double dailyLossLimit = InpInitialBalance * InpDailyLossLimitPct / 100.0;
+   double maxLossLimit = InpInitialBalance * InpMaxLossLimitPct / 100.0;
+   double profitTarget = InpInitialBalance * iInpProfitTargetPct / 100.0;
+   
+   // Check daily loss limit (including floating)
+   if(dailyPnLWithFloating <= -dailyLossLimit)
+   {
+      Print("Daily loss limit reached (floating): ", DoubleToString(dailyPnLWithFloating, 2), " / -", DoubleToString(dailyLossLimit, 2));
+      CloseAllPositions(POSITION_TYPE_BUY);
+      CloseAllPositions(POSITION_TYPE_SELL);
+      Alert("Daily loss limit reached! All positions closed.");
+      ExpertRemove();
+      return;
+   }
+   
+   // Check maximum loss limit
+   if(totalPnL <= -maxLossLimit)
+   {
+      Print("Maximum loss limit reached: ", DoubleToString(totalPnL, 2), " / -", DoubleToString(maxLossLimit, 2));
+      CloseAllPositions(POSITION_TYPE_BUY);
+      CloseAllPositions(POSITION_TYPE_SELL);
+      Alert("Maximum loss limit reached! All positions closed.");
+      ExpertRemove();
+      return;
+   }
+   
+   // Check profit target
+   if(dailyPnL >= profitTarget)
+   {
+      Print("Daily profit target reached: ", DoubleToString(dailyPnL, 2), " / ", DoubleToString(profitTarget, 2));
+      CloseAllPositions(POSITION_TYPE_BUY);
+      CloseAllPositions(POSITION_TYPE_SELL);
+      Alert("Daily profit target reached! All positions closed.");
+      ExpertRemove();
+      return;
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Display Info on Chart                                            |
 //+------------------------------------------------------------------+
 void DisplayInfo()
 {
+   // Calculate current P&L
+   double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double totalPnL = currentBalance - InpInitialBalance;
+   double dailyPnL = currentBalance - dailyStartBalance;
+   
+   // Calculate account limits
+   double dailyLossLimit = InpInitialBalance * InpDailyLossLimitPct / 100.0;
+   double maxLossLimit = InpInitialBalance * InpMaxLossLimitPct / 100.0;
+   double profitTarget = InpInitialBalance * iInpProfitTargetPct / 100.0;
+   
+   // Calculate remaining limits
+   double dailyLossRemaining = dailyLossLimit + dailyPnL;  // How much more loss allowed
+   double maxLossRemaining = maxLossLimit + totalPnL;      // How much more loss allowed
+   double profitRemaining = profitTarget - dailyPnL;       // How much more profit needed
+   
    string info = "\n=== BOS EA Info ===\n";
+   info += "Evaluation Mode: " + (InpEnableEvaluation ? "ON" : "OFF") + "\n";
+   info += "Daily Start Bal: " + DoubleToString(dailyStartBalance, 2) + "\n";
+   info += "Current Bal: " + DoubleToString(currentBalance, 2) + "\n";
+   info += "Daily P&L: " + DoubleToString(dailyPnL, 2) + "\n";
+   info += "Daily Loss Limit: " + DoubleToString(dailyLossRemaining, 2) + "\n";
+   info += "Max Loss Limit: " + DoubleToString(maxLossRemaining, 2) + "\n";
+   info += "Profit Target: " + DoubleToString(profitRemaining, 2) + "\n";
+   info += "\n";
    info += "HTF Trend: " + EnumToString(htfTrend) + "\n";
    info += "Last HTF Swing: " + (lastHTFSwingWasHigh ? "HIGH" : "LOW") + "\n";
    info += "HTF Last High: " + DoubleToString(htfLastHigh.price, _Digits) + "\n";
-   info += "HTF Last Low: " + DoubleToString(htfLastLow.price, _Digits) + "\n";
+   info += "HTF Last Low: " + DoubleToString(ltfLastLow.price, _Digits) + "\n";
    info += "LTF Last High: " + DoubleToString(ltfLastHigh.price, _Digits) + "\n";
    info += "LTF Last Low: " + DoubleToString(ltfLastLow.price, _Digits) + "\n";
    info += "BOS Active: " + (currentBOS.isActive ? "Yes" : "No") + "\n";
