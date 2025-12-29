@@ -187,7 +187,10 @@ void AnalyzePivotPoints(ENUM_TIMEFRAMES timeframe, PivotPoint &lastHigh, PivotPo
             prevHigh = lastHigh;
             
          lastHigh = tempLastHigh;
-         DrawPivotPoints("HH", timeframe, lastHigh);
+
+         // Ignore drawing pivot points for current timeframe
+         if(timeframe != InpLowTF)
+            DrawPivotPoints("HH", timeframe, lastHigh);
       }
    }
    
@@ -195,7 +198,10 @@ void AnalyzePivotPoints(ENUM_TIMEFRAMES timeframe, PivotPoint &lastHigh, PivotPo
    if(tempPrevHigh.isValid)
    {
       prevHigh = tempPrevHigh;
-      DrawPivotPoints("hh", timeframe, prevHigh);
+      
+      // Ignore drawing pivot points for current timeframe
+      if(timeframe != InpLowTF)
+         DrawPivotPoints("hh", timeframe, prevHigh);
    }
 
    // Update htfLastLow if new pivot found
@@ -208,7 +214,10 @@ void AnalyzePivotPoints(ENUM_TIMEFRAMES timeframe, PivotPoint &lastHigh, PivotPo
             prevLow = lastLow;
             
          lastLow = tempLastLow;
-         DrawPivotPoints("LL", timeframe, lastLow);
+         
+         // Ignore drawing pivot points for BOS timeframe
+         if(timeframe != InpLowTF)
+            DrawPivotPoints("LL", timeframe, lastLow);
       }
    }
    
@@ -216,7 +225,10 @@ void AnalyzePivotPoints(ENUM_TIMEFRAMES timeframe, PivotPoint &lastHigh, PivotPo
    if(tempPrevLow.isValid)
    {
       prevLow = tempPrevLow;
-      DrawPivotPoints("ll", timeframe, prevLow);
+
+      // Ignore drawing pivot points for BOS timeframe
+      if(timeframe != InpLowTF)
+         DrawPivotPoints("ll", timeframe, prevLow);
    }
 }
 
@@ -651,93 +663,6 @@ void AddBoxAtTime(ENUM_TIMEFRAMES timeframe, datetime leftTime, double top, doub
    //       " | Top: ", top, " | Bottom: ", bottom, " | LeftTime: ", TimeToString(leftTime, TIME_DATE|TIME_MINUTES),
    //       " | Total boxes: ", g_BoxCount);
 }
-
-// //+------------------------------------------------------------------+
-// //+------------------------------------------------------------------+
-// void AddBox(ENUM_TIMEFRAMES timeframe, double top, double bottom, double volume, bool isSupport)
-// {
-//    if(g_BoxCount >= MAX_BOXES)
-//    {
-//       // Print("   ⚠️ Box limit reached, removing oldest box");
-//       // Delete oldest box visuals
-//       ObjectDelete(0, g_Boxes[0].name);
-//       ObjectDelete(0, g_Boxes[0].name + "_label");
-      
-//       // Remove oldest box
-//       for(int i = 0; i < MAX_BOXES - 1; i++)
-//          g_Boxes[i] = g_Boxes[i + 1];
-//       g_BoxCount = MAX_BOXES - 1;
-//    }
-
-//    int lookback = InpPivotLeftBars;
-   
-//    datetime currentTime = TimeCurrent();
-//    datetime leftTime = iTime(_Symbol, timeframe, lookback / 2);
-//    datetime rightTime = iTime(_Symbol, timeframe, 0);
-   
-//    string boxName = "SRBox_" + TimeToString(currentTime, TIME_DATE|TIME_SECONDS) + "_" + (isSupport ? "SUP" : "RES");
-   
-//    g_Boxes[g_BoxCount].name = boxName;
-//    g_Boxes[g_BoxCount].top = top;
-//    g_Boxes[g_BoxCount].bottom = bottom;
-//    g_Boxes[g_BoxCount].left = leftTime;
-//    g_Boxes[g_BoxCount].right = rightTime;
-//    g_Boxes[g_BoxCount].created = currentTime;
-//    g_Boxes[g_BoxCount].volume = volume;
-//    g_Boxes[g_BoxCount].is_support = isSupport;
-//    g_Boxes[g_BoxCount].is_broken = false;
-//    g_Boxes[g_BoxCount].traded = false;
-//    g_Boxes[g_BoxCount].drawn = false;
-   
-//    // Determine colors
-//    color bgColor, borderColor;
-//    if(isSupport)
-//    {
-//       bgColor = ColorWithAlpha(clrLightGreen, 128);
-//       borderColor = ColorWithAlpha(clrGreen, 128);
-//    }
-//    else
-//    {
-//       bgColor = ColorWithAlpha(clrLightPink, 128);
-//       borderColor = ColorWithAlpha(clrRed, 128);
-//    }
-   
-//    g_Boxes[g_BoxCount].bgcolor = bgColor;
-//    g_Boxes[g_BoxCount].bordercolor = borderColor;
-//    g_Boxes[g_BoxCount].border_style = STYLE_SOLID;
-   
-//    // Draw the box on chart
-//    if(ObjectCreate(0, boxName, OBJ_RECTANGLE, 0, leftTime, top, rightTime, bottom))
-//    {
-//       ObjectSetInteger(0, boxName, OBJPROP_COLOR, borderColor);
-//       ObjectSetInteger(0, boxName, OBJPROP_STYLE, STYLE_SOLID);
-//       ObjectSetInteger(0, boxName, OBJPROP_WIDTH, 1);
-//       ObjectSetInteger(0, boxName, OBJPROP_FILL, true);
-//       ObjectSetInteger(0, boxName, OBJPROP_BACK, true);
-//       ObjectSetInteger(0, boxName, OBJPROP_BGCOLOR, bgColor);
-//       ObjectSetInteger(0, boxName, OBJPROP_SELECTABLE, false);
-//       ObjectSetInteger(0, boxName, OBJPROP_SELECTED, false);
-      
-//       // Add volume label
-//       string labelName = boxName + "_label";
-//       double labelPrice = isSupport ? top : bottom;
-//       if(ObjectCreate(0, labelName, OBJ_TEXT, 0, leftTime, labelPrice))
-//       {
-//          ObjectSetString(0, labelName, OBJPROP_TEXT, "Vol: " + DoubleToString(volume, 0));
-//          ObjectSetInteger(0, labelName, OBJPROP_COLOR, ColorWithAlpha(clrWhite, 128));
-//          ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 8);
-//          ObjectSetInteger(0, labelName, OBJPROP_BACK, true);
-//       }
-      
-//       g_Boxes[g_BoxCount].drawn = true;
-//    }
-   
-//    g_BoxCount++;
-   
-//    // Print("   📦 Box added [#", g_BoxCount, "] - Type: ", (isSupport ? "SUPPORT" : "RESISTANCE"), 
-//    //       " | Top: ", top, " | Bottom: ", bottom, " | Total boxes: ", g_BoxCount);
-
-// }
 
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+

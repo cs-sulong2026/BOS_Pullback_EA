@@ -199,8 +199,8 @@ TREND_TYPE DetermineTrend(ENUM_TIMEFRAMES timeframe, PivotPoint &lastHigh, Pivot
 //+------------------------------------------------------------------+
 MARKET_CONDITIONS DetermineMarketCondition(TREND_TYPE trend, PivotPoint &lastHigh, PivotPoint &prevHigh, PivotPoint &lastLow, PivotPoint &prevLow)
 {
-   // If we don't have enough data
-   if(!lastHigh.isValid || !lastLow.isValid)
+   // If we don't have enough data or trend is undecided
+   if(!lastHigh.isValid || !lastLow.isValid || trend == TREND_UNDECIDED)
       return NOT_VALIDATE;
    
    // Sideways trend indicates consolidation/range
@@ -221,8 +221,12 @@ MARKET_CONDITIONS DetermineMarketCondition(TREND_TYPE trend, PivotPoint &lastHig
          lowMove = (lastLow.price - prevLow.price) / prevLow.price * 100;
          
          // Strong bullish trend: both highs and lows moving up significantly
-         if(highMove > 0.5 && lowMove > 0.3) // At least 0.5% higher high and 0.3% higher low
+         // AND both must be actually moving up (positive values)
+         if(highMove > 0.5 && lowMove > 0.3 && highMove > 0 && lowMove > 0)
             return CLEAR_AND_STRONG_TREND;
+         
+         // Weak bullish trend but still trending - consolidating within uptrend
+         return CONSOLIDATE_AND_RANGE;
       }
       else if(trend == TREND_BEARISH)
       {
@@ -231,17 +235,19 @@ MARKET_CONDITIONS DetermineMarketCondition(TREND_TYPE trend, PivotPoint &lastHig
          lowMove = (prevLow.price - lastLow.price) / prevLow.price * 100;
          
          // Strong bearish trend: both highs and lows moving down significantly
-         if(highMove > 0.5 && lowMove > 0.3) // At least 0.5% lower high and 0.3% lower low
+         // AND both must be actually moving down (positive values after reversal calc)
+         if(highMove > 0.5 && lowMove > 0.3 && highMove > 0 && lowMove > 0)
             return CLEAR_AND_STRONG_TREND;
+         
+         // Weak bearish trend but still trending - consolidating within downtrend
+         return CONSOLIDATE_AND_RANGE;
       }
-      
-      // Weak trend - still trending but not strong enough
-      return CONSOLIDATE_AND_RANGE;
    }
    
-   // Default: if we have trend but can't determine strength
+   // If we don't have previous pivots but have a clear trend direction,
+   // assume it's consolidating until we get more data to confirm strength
    if(trend == TREND_BULLISH || trend == TREND_BEARISH)
-      return CLEAR_AND_STRONG_TREND;
+      return CONSOLIDATE_AND_RANGE;
    
    return NOT_VALIDATE;
 }
@@ -258,8 +264,12 @@ TRADING_STRATEGY DetermineTradingStrategy(TREND_TYPE trend, MARKET_CONDITIONS co
    if(InpEnableScalping)
       return SCALPING;
    
-   // If data is not validated
-   if(condition == NOT_VALIDATE)
+   // If data is not validated or trend is undecided
+   if(condition == NOT_VALIDATE || trend == TREND_UNDECIDED)
+      return UNDECIDED;
+   
+   // AHEAD_OF_BIG_NEWS - not used but handle defensively
+   if(condition == AHEAD_OF_BIG_NEWS)
       return UNDECIDED;
    
    // Clear and strong trend - use trend following
@@ -267,6 +277,10 @@ TRADING_STRATEGY DetermineTradingStrategy(TREND_TYPE trend, MARKET_CONDITIONS co
    {
       if(trend == TREND_BULLISH || trend == TREND_BEARISH)
          return TREND_FOLLOWER;
+      
+      // If somehow we have strong trend but sideways market (shouldn't happen)
+      // This is a logic inconsistency - default to undecided
+      return UNDECIDED;
    }
    
    // Consolidation and ranging market
@@ -274,14 +288,18 @@ TRADING_STRATEGY DetermineTradingStrategy(TREND_TYPE trend, MARKET_CONDITIONS co
    {
       if(trend == TREND_SIDEWAYS)
       {
-         // Sideways market has two strategies
+         // True sideways market - range trade or wait for breakout
          secondaryStrategy = BREAKOUT_TRADING;
          return RANGE_TRADING;  // Primary: trade the range, Secondary: wait for breakout
       }
-      else
-         return SWING_TRADING;  // Weak trend - swing trade
+      else if(trend == TREND_BULLISH || trend == TREND_BEARISH)
+      {
+         // Weak trend still moving in a direction - swing trade the pullbacks
+         return SWING_TRADING;
+      }
    }
    
+   // Shouldn't reach here, but handle defensively
    return UNDECIDED;
 }
 

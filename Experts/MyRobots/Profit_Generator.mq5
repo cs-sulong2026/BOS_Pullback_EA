@@ -221,12 +221,60 @@ void CheckForBOS()
    // When InpEnableSupertrend is enabled
    if(InpEnableSupertrend)
    {
-      // Block trades when trend is neutral
+      // If swing trend is sideways, check daily trend
       if(swH_Trend == TREND_SIDEWAYS)
-         return;
-      
-      // Check for BEARISH BOS when trend is bearish
-      if(swH_Trend == TREND_BEARISH && InpTradeDirection != TRADE_BUY_ONLY)
+      {
+         // Only proceed if daily trend is clear and strong
+         if(D_MarketCondition != CLEAR_AND_STRONG_TREND)
+            return;
+            
+         // Use daily trend direction instead
+         if(D_Trend == TREND_BEARISH && InpTradeDirection != TRADE_BUY_ONLY)
+         {
+            // Bearish BOS: Price breaks below most recent swing low
+            if(L_LastLow.isValid)
+            {
+               if(currentClose < L_LastLow.price && !BOS.isActive)
+               {
+                  BOS.price = L_LastLow.price;
+                  BOS.time = TimeCurrent();
+                  BOS.isBullish = false;
+                  BOS.isActive = true;
+                  BOS.barIndex = 0;
+                  waitingForPullback = true;
+                  
+                  Print("Bearish BOS detected at ", BOS.price, " (Swing: SIDEWAYS, Daily Trend: BEARISH)");
+                  DrawBOSLevel(BOS.price, BOS.time, false);
+               }
+            }
+         }
+         else if(D_Trend == TREND_BULLISH && InpTradeDirection != TRADE_SELL_ONLY)
+         {
+            // Bullish BOS: Price breaks above most recent swing high
+            if(L_LastHigh.isValid)
+            {
+               if(currentClose > L_LastHigh.price && !BOS.isActive)
+               {
+                  BOS.price = L_LastHigh.price;
+                  BOS.time = TimeCurrent();
+                  BOS.isBullish = true;
+                  BOS.isActive = true;
+                  BOS.barIndex = 0;
+                  waitingForPullback = true;
+                  
+                  Print("Bullish BOS detected at ", BOS.price, " (Swing: SIDEWAYS, Daily Trend: BULLISH)");
+                  DrawBOSLevel(BOS.price, BOS.time);
+               }
+            }
+         }
+         else
+         {
+            // Daily trend is also sideways or undecided - no BOS
+            return;
+         }
+      }
+      // Swing trend is clear (not sideways)
+      else if(swH_Trend == TREND_BEARISH && InpTradeDirection != TRADE_BUY_ONLY)
       {
          // Bearish BOS: Price breaks below most recent swing low
          if(L_LastLow.isValid)
@@ -328,8 +376,19 @@ void CheckForEntry()
    if(BOS.isBullish && waitingForPullback)
    {
       // Check trend alignment if supertrend filter is enabled
-      if(checkTrend && swH_Trend != TREND_BULLISH)
-         return;
+      if(checkTrend)
+      {
+         // If swing trend is sideways, check daily trend
+         if(swH_Trend == TREND_SIDEWAYS)
+         {
+            // Only proceed if daily trend is bullish and market is clear
+            if(D_Trend != TREND_BULLISH || D_MarketCondition != CLEAR_AND_STRONG_TREND)
+               return;
+         }
+         // If swing trend is not sideways, it must be bullish
+         else if(swH_Trend != TREND_BULLISH)
+            return;
+      }
       
       // Check trade direction filter
       if(InpTradeDirection == TRADE_SELL_ONLY)
@@ -368,8 +427,19 @@ void CheckForEntry()
    else if(!BOS.isBullish && waitingForPullback)
    {
       // Check trend alignment if supertrend filter is enabled
-      if(checkTrend && swH_Trend != TREND_BEARISH)
-         return;
+      if(checkTrend)
+      {
+         // If swing trend is sideways, check daily trend
+         if(swH_Trend == TREND_SIDEWAYS)
+         {
+            // Only proceed if daily trend is bearish and market is clear
+            if(D_Trend != TREND_BEARISH || D_MarketCondition != CLEAR_AND_STRONG_TREND)
+               return;
+         }
+         // If swing trend is not sideways, it must be bearish
+         else if(swH_Trend != TREND_BEARISH)
+            return;
+      }
       
       // Check trade direction filter
       if(InpTradeDirection == TRADE_BUY_ONLY)
