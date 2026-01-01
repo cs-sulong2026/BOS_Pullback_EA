@@ -9,6 +9,7 @@
 
 #include <Trade/Trade.mqh>
 #include <Trade/SymbolInfo.mqh>
+#include <Trade/AccountInfo.mqh>
 
 
 //#region Structures
@@ -31,7 +32,6 @@ struct PivotPoint
 
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
-
 struct BoxData
 {
    string   name;
@@ -46,8 +46,22 @@ struct BoxData
    double   volume;
    bool     is_support;
    bool     is_broken;
+   bool     is_reheld;
    bool     traded;
    bool     drawn;
+   int      traded_count;
+   int      hold_count;
+   int      box_hold_limit;
+   int      break_count;
+   int      box_break_limit;
+   int      buyOnHold_count;
+   int      buyOnBreakout_count;
+   int      sellOnHold_count;
+   int      sellOnBreakout_count;
+   int      buyOnHold_limit;
+   int      buyOnBreakout_limit;
+   int      sellOnHold_limit;
+   int      sellOnBreakout_limit;
 };
 
 //+------------------------------------------------------------------+
@@ -57,6 +71,17 @@ struct BOSLevel
    double   price;
    datetime time;
    bool     isBullish;
+   bool     isActive;
+   int      barIndex;
+};
+
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+struct SnRLevel
+{
+   double   price;
+   datetime time;
+   bool     isSupport;
    bool     isActive;
    int      barIndex;
 };
@@ -334,8 +359,9 @@ input group "=== Trading Strategy ==="
 input TRADE_DIRECTION   InpTradeDirection = TRADE_BOTH;     // Allowed trade direction
 input bool              InpEnableScalping = false;          // Enable Scalping Mode
 input bool              InpEnableSupertrend = true;         // Enable trade by Swing trend
-input int               InpPullbackPoints = 50;               // Min pullback points to BOS level
-input int               InpBOSConfirmBars = 2;                // BOS confirmation bars
+input int               InpBOSPullbackPoints = 50;          // Min pullback points to BOS level
+input int               InpSnRPullbackPoints = 50;          // Min pullback points to SnR level
+input int               InpBOSConfirmBars = 2;              // BOS confirmation bars
 
 input group "═══════ Trading Settings ═══════"
 input bool              InpTradeBreakouts = true;          // Trade Breakouts
@@ -350,8 +376,14 @@ input double            InpLotSize = 0.01;                  // Fixed lot size (w
 input int               InpStopLoss = 0;                    // Stop Loss in pips (0=auto from swing)
 input int               InpTakeProfit = 0;                  // Take Profit in pips (0=auto from swing)
 input double            InpRiskRewardRatio = 2.0;           // Risk:Reward ratio (when SL/TP=0)
-input int               InpMaxBuyTrades = 1;                // Max simultaneous BUY trades
-input int               InpMaxSellTrades = 1;               // Max simultaneous SELL trades
+input int               InpMaxBuyOnBOS = 1;                 // Max simultaneous BUY trades on BOS
+input int               InpMaxSellOnBOS = 1;                // Max simultaneous SELL trades on BOS
+input int               InpMaxBuyOnSnR = 1;                 // Max simultaneous BUY trades on S&R (all)
+input int               InpMaxSellOnSnR = 1;                // Max simultaneous SELL trades on S&R (all)
+input int               InpMaxBuyOnHold = 1;                // Max simultaneous BUY trades on Hold signals
+input int               InpMaxSellOnHold = 1;               // Max simultaneous SELL trades on Hold signals
+input int               InpMaxBuyOnBreakout = 1;            // Max simultaneous BUY trades on Breakout signals
+input int               InpMaxSellOnBreakout = 1;           // Max simultaneous SELL trades on Breakout signals
 input bool              InpBlockOppositeEntry = true;       // Block entry if opposite positions exist
 input bool              InpCloseOnNewSwing = true;          // Close positions when new HTF swing detected
 input bool              InpUseTrailingStop = false;         // Enable trailing stop
@@ -359,14 +391,19 @@ input int               InpTrailingStop = 50;               // Trailing stop dis
 input int               InpTrailingStep = 10;               // Minimum price movement to trail (pips)
 
 input group "═══════ Display Settings ═══════"
-input bool              InpShowPreviousBoxes = true;        // Show Previous Boxes
-input bool              InpShowOnlyNearest = false;          // Show Only Nearest S/R to Price
+// input bool              InpShowPreviousBoxes = true;        // Show Previous Boxes
+input bool              InpShowOnlyClosest = false;          // Show Only Closest S/R Level (Hold/Breakout)
 input int               InpMaxVisibleBoxes = 5;              // Maximum Visible Boxes (0=All)
 
 input group "═══════ Order Management ═══════"
-input int               InpMagicNumber    = 435067;         // Magic Number
+input int               InpBOSMagicNumber = 435067;         // BOS Magic Number
+input int               InpSnRMagicNumber = 123456;         // SnR Magic Number
 input string            InpTradeComment   = "PG_EA";        // Trade Comment
 input int               InpSlippage       = 10;             // Slippage (points)
+
+input group "═══════ Logging Settings ═══════"
+input bool              InpEnableLogging = true;            // Enable Logging to File
+input bool              InpSilentLogging = false;           // Silent Logging (no console output)
 
 //#endregion
 //#region Global Variables
@@ -377,26 +414,31 @@ input int               InpSlippage       = 10;             // Slippage (points)
 
 CTrade            trade;
 CSymbolInfo       symbolInfo;
+CAccountInfo      account;
 
 //--- Trend Analysis
 TREND_TYPE        W_Trend = TREND_SIDEWAYS;
 TREND_TYPE        D_Trend = TREND_SIDEWAYS;
 TREND_TYPE        swH_Trend = TREND_SIDEWAYS;
+TREND_TYPE        snrH_Trend = TREND_SIDEWAYS;
 
 //--- Market Conditions
 MARKET_CONDITIONS W_MarketCondition = NOT_VALIDATE;
 MARKET_CONDITIONS D_MarketCondition = NOT_VALIDATE;
 MARKET_CONDITIONS swH_MarketCondition = NOT_VALIDATE;
+MARKET_CONDITIONS snrH_MarketCondition = NOT_VALIDATE;
 
 //--- Trading Strategies
 TRADING_STRATEGY  W_Strategy = UNDECIDED;
 TRADING_STRATEGY  D_Strategy = UNDECIDED;
 TRADING_STRATEGY  swH_Strategy = UNDECIDED;
+TRADING_STRATEGY  snrH_Strategy = UNDECIDED;
 
 //--- Secondary Trading Strategies (for sideways markets)
 TRADING_STRATEGY  W_SecondaryStrategy = UNDECIDED;
 TRADING_STRATEGY  D_SecondaryStrategy = UNDECIDED;
 TRADING_STRATEGY  swH_SecondaryStrategy = UNDECIDED;
+TRADING_STRATEGY  snrH_SecondaryStrategy = UNDECIDED;
 
 //--- Weekly trend pivot points
 PivotPoint        W_LastHigh;
@@ -438,8 +480,15 @@ double            g_SupportLevel1 = 0;
 double            g_ResistanceLevel = 0;
 double            g_ResistanceLevel1 = 0;
 
+// Support/Resistance status
 bool              g_ResIsSupport = false;
 bool              g_SupIsResistance = false;
+bool              IsBreakout = false;
+bool              IsHold = false;
+bool              TrendAligned = false;
+int               g_ActiveBoxIndex = -1;  // Track which box triggered the signal
+int               breakLimit = 2;
+int               holdLimit = 2;
 
 //--- Bar time tracking for each timeframe
 datetime          g_LastBarTime_W1 = 0;
@@ -461,6 +510,15 @@ bool              lastSwingWasHigh = false;
 double            dailyStartBalance = 0.0;
 datetime          currentDay = 0;
 bool              dailyResetDone = false;
+
+static int        log_counter = 0;
+int               log_file = 0;
+int               acc_login = 0;
+string            expert_folder = "";
+string            work_folder = "";
+string            log_fileName = "";
+bool              common_folder = false;
+bool              silent_log = false;
 
 //#endregion
 //#region String Methods
@@ -534,6 +592,34 @@ string TFtoString(ENUM_TIMEFRAMES tf)
       case PERIOD_MN1: return "MN1";
       default: return "UNKNOWN";
    }
+}
+
+//+------------------------------------------------------------------+
+//| Method CurrentAccountInfo                                        |
+//+------------------------------------------------------------------+
+string CurrentAccountInfo(string server)
+{
+   int eq_pos = StringFind(server,"-");
+   string server_name = (eq_pos != -1) ? StringSubstr(server, 0, eq_pos) : server;
+   Print("Account Server: ",server_name);
+   return(server_name);
+}
+
+//+------------------------------------------------------------------+
+//| Method RemoveDots                                                |
+//+------------------------------------------------------------------+
+string RemoveDots(string str)
+{
+   StringReplace(str,".","");
+   return(str);
+}
+
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+datetime DateToString()
+{
+   string dateStr = TimeToString(TimeLocal(), TIME_DATE);
+   return StringToTime(dateStr);
 }
 
 //#endregion
@@ -695,5 +781,68 @@ int LookbackPeriod(ENUM_TIMEFRAMES timeframe)
 }
 
 //#endregion
+
+//+------------------------------------------------------------------+
+//| Method CreateFolder                                              |
+//+------------------------------------------------------------------+
+bool CreateFolder(string folder_name, bool common_flag)
+{
+   int flag = common_flag ? FILE_COMMON : 0;
+   string working_folder;
+   if (common_flag)
+      working_folder = TerminalInfoString(TERMINAL_COMMONDATA_PATH)+"\\MQL5\\Files";
+   else
+      working_folder = TerminalInfoString(TERMINAL_DATA_PATH)+"\\MQL5\\Files";
+   //---
+   // PrintFormat("folder_path=%s",folder_name);
+   //---
+   if (FolderCreate(folder_name, flag))
+   {
+      // PrintFormat("Created the folder %s",working_folder+"\\"+folder_name);
+      ResetLastError();
+      return(true);
+   }
+   else
+      PrintFormat("Failed to create the folder %s. Error code %d",working_folder+folder_name,GetLastError());
+   //--- 
+   return(false);
+}
+
+void Logging(const string message)
+{
+   if(!InpEnableLogging)
+      return;
+   
+   log_counter++;
+   if (StringLen(log_fileName) > 0)
+   {
+      if (!FileIsExist(work_folder+log_fileName)) {
+         if (CreateFolder(work_folder, common_folder)) {
+            Print("New log folder created: ", work_folder);
+            ResetLastError();
+         }
+         else {
+            Print("Failed to create log folder: ", work_folder, ". Error code ", GetLastError());
+            return;
+         }
+      }
+      //---
+      if (log_file == INVALID_HANDLE)
+         log_file = FileOpen(work_folder + log_fileName, FILE_CSV|FILE_READ|FILE_WRITE, ' ');
+      //---
+      if (log_file == INVALID_HANDLE)
+         Alert("Cannot open file for logging: ", work_folder + log_fileName);
+      else if (FileSeek(log_file, 0, SEEK_END))
+      {
+         FileWrite(log_file, TimeToString(TimeLocal(), TIME_DATE | TIME_MINUTES | TIME_SECONDS), " #", log_counter, " ", message);
+         FileFlush(log_file);
+         FileClose(log_file);
+         log_file = INVALID_HANDLE;
+      }
+      else Alert("Unexpected error accessing log file: ", work_folder + log_fileName);
+   }      
+   if (!silent_log)
+      Print(message);
+}
 
 //+------------------------------------------------------------------+

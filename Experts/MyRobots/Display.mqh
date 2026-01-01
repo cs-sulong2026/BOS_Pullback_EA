@@ -158,12 +158,12 @@ void DisplayAllTimeframesAnalysis()
       offset += 100;
    }
    
-   // // Display Lower Timeframe Analysis (M15 or custom)
-   // if(M_LastHigh.isValid || M_LastLow.isValid)
-   // {
-   //    DisplayMarketAnalysis(InpLowTF, M_Trend, M_MarketCondition, M_Strategy, M_SecondaryStrategy, offset);
-   //    offset += 100;
-   // }
+   // Display Lower Timeframe Analysis (M15 or custom)
+   if(snrH_LastHigh.isValid || snrH_LastLow.isValid)
+   {
+      DisplayMarketAnalysis(InpSnRTF, snrH_Trend, snrH_MarketCondition, snrH_Strategy, snrH_SecondaryStrategy, offset);
+      offset += 100;
+   }
 }
 
 //+------------------------------------------------------------------+
