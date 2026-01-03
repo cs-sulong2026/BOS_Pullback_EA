@@ -293,6 +293,67 @@ void AnalyzeLevels(ENUM_TIMEFRAMES timeframe, int shift)
 }
 
 //+------------------------------------------------------------------+
+//| Analyze Low Timeframe for swing points                           |
+//+------------------------------------------------------------------+
+void AnalyzeLowPivots()
+{
+   int lookback = 50;
+   
+   // Reset previous values
+   L_PrevHigh.isValid = false;
+   L_PrevLow.isValid = false;
+   
+   for(int i = InpPivotRightBars; i < lookback; i++)
+   {
+      // Check for swing high
+      if(IsPivotHigh(i, InpLowTF))
+      {
+         double highPrice = iHigh(_Symbol, InpLowTF, i);
+         datetime highTime = iTime(_Symbol, InpLowTF, i);
+         
+         if(!L_LastHigh.isValid || highTime > L_LastHigh.time)
+         {
+            L_PrevHigh = L_LastHigh;
+            L_LastHigh.price = highPrice;
+            L_LastHigh.time = highTime;
+            L_LastHigh.barIndex = i;
+            L_LastHigh.isValid = true;
+         }
+         else if(!L_PrevHigh.isValid)
+         {
+            L_PrevHigh.price = highPrice;
+            L_PrevHigh.time = highTime;
+            L_PrevHigh.barIndex = i;
+            L_PrevHigh.isValid = true;
+         }
+      }
+      
+      // Check for swing low
+      if(IsPivotLow(i, InpLowTF))
+      {
+         double lowPrice = iLow(_Symbol, InpLowTF, i);
+         datetime lowTime = iTime(_Symbol, InpLowTF, i);
+         
+         if(!L_LastLow.isValid || lowTime > L_LastLow.time)
+         {
+            L_PrevLow = L_LastLow;
+            L_LastLow.price = lowPrice;
+            L_LastLow.time = lowTime;
+            L_LastLow.barIndex = i;
+            L_LastLow.isValid = true;
+         }
+         else if(!L_PrevLow.isValid)
+         {
+            L_PrevLow.price = lowPrice;
+            L_PrevLow.time = lowTime;
+            L_PrevLow.barIndex = i;
+            L_PrevLow.isValid = true;
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
 //|
 //+------------------------------------------------------------------+
 void AnalyzePreviousLevels(ENUM_TIMEFRAMES timeframe, int shift)
@@ -348,33 +409,32 @@ void CheckTradingSignals(ENUM_TIMEFRAMES timeframe, int shift,
          //       " | Traded=", g_Boxes[i].traded, " | Broken=", g_Boxes[i].is_broken);
          
          // Support breakout validated on snr tf = SELL signal
-         prevHigh = iHigh(_Symbol, InpSnRTF, shift + 1);
-         currHigh = iHigh(_Symbol, InpSnRTF, shift);
+         prevHigh = iHigh(_Symbol, PERIOD_CURRENT, shift + 1);
+         currHigh = iHigh(_Symbol, PERIOD_CURRENT, shift);
          bool breakoutSup = (prevHigh >= g_Boxes[i].bottom && currHigh < g_Boxes[i].bottom);
          
          // Support hold = BUY signal (retest)
          bool supHolds = (prevLow <= g_Boxes[i].top && currLow > g_Boxes[i].top);
          
-         if(breakoutSup) Print("            🔴 Support BREAKOUT detected!");
-         if(supHolds) Print("            🟢 Support HOLD detected!");
+         if(breakoutSup) Logging("            🔴 Support BREAKOUT detected!");
+         if(supHolds) Logging("            🟢 Support HOLD detected!");
          
          if(breakoutSup && !g_Boxes[i].is_broken)
          {
             g_Boxes[i].is_broken = true;
             g_SupIsResistance = true;
-            Print("            ⚡ Support broken! Checking trade conditions...");
+            Logging("            ⚡ Support broken! Checking trade conditions...");
             
             // Update box visual
             UpdateBoxVisual(i, true);
-            CreateVisualMarker(iTime(_Symbol, timeframe, shift), g_Boxes[i].bottom, "SUP", true);
+            // CreateVisualMarker(iTime(_Symbol, timeframe, shift), g_Boxes[i].bottom, "SUP", true);
             
             // SELL on support break
-            if(InpTradeBreakouts && InpSellSignals && !g_Boxes[i].traded)
+            if(InpTradeBreakouts && InpSellSignals && !g_Boxes[i].traded && !g_Boxes[i].is_disabled)
             {
                // Print("            ➤ Opening SELL on support break");
                CreateBreakoutLabel(iTime(_Symbol, timeframe, shift), g_Boxes[i].bottom, "Break Sup", false);
                // OpenTrade(ORDER_TYPE_SELL, "Support Break", g_Boxes[i].top);
-               // CheckForBreakout(i);
                g_Boxes[i].traded = true;
             }
             else
@@ -388,14 +448,14 @@ void CheckTradingSignals(ENUM_TIMEFRAMES timeframe, int shift,
          {
             g_Boxes[i].is_broken = false;
             g_SupIsResistance = false;
-            Print("            ⚡ Support held! Checking trade conditions...");
+            Logging("            ⚡ Support held! Checking trade conditions...");
             
             // Update box visual
             UpdateBoxVisual(i, false);
-            CreateVisualMarker(iTime(_Symbol, timeframe, shift), g_Boxes[i].top, "SUP", false);
+            // CreateVisualMarker(iTime(_Symbol, timeframe, shift), g_Boxes[i].top, "SUP", false);
             
             // BUY on support hold
-            if(InpTradeRetests && InpBuySignals)
+            if(InpTradeRetests && InpBuySignals && !waitingForPullback && !g_Boxes[i].is_disabled)
             {
                // Print("            ➤ Opening BUY on support hold");
                // OpenTrade(ORDER_TYPE_BUY, "Support Hold", g_Boxes[i].bottom);
@@ -414,6 +474,7 @@ void CheckTradingSignals(ENUM_TIMEFRAMES timeframe, int shift,
          {
             // Reset broken status if support held after being broken
             g_Boxes[i].is_reheld = true;
+            g_Boxes[i].is_disabled = true;  // Disable box for new trades
             g_Boxes[i].is_broken = false;
             g_SupIsResistance = false;
             // g_Boxes[i].traded = false;
@@ -426,11 +487,11 @@ void CheckTradingSignals(ENUM_TIMEFRAMES timeframe, int shift,
             // g_Boxes[i].sellOnBreakout_limit = 4;
             // holdLimit = 100;
             // breakLimit = 100;
-            Logging("            ⚡ Support re-held after break!");
+            Logging("            ⚡ Support re-held after break! Box disabled for trading.");
             
             // Update box visual
             UpdateBoxVisual(i, false);
-            CreateVisualMarker(iTime(_Symbol, timeframe, shift), g_Boxes[i].top, "SUP", false);
+            // CreateVisualMarker(iTime(_Symbol, timeframe, shift), g_Boxes[i].top, "SUP", false);
          }
       }
       else // Resistance
@@ -439,34 +500,35 @@ void CheckTradingSignals(ENUM_TIMEFRAMES timeframe, int shift,
          //       " | Traded=", g_Boxes[i].traded, " | Broken=", g_Boxes[i].is_broken);
          
          // Resistance breakout validated on snr tf = BUY signal
-         prevLow = iLow(_Symbol, InpSnRTF, shift + 1);
-         currLow = iLow(_Symbol, InpSnRTF, shift);
+         prevLow = iLow(_Symbol, PERIOD_CURRENT, shift + 1);
+         currLow = iLow(_Symbol, PERIOD_CURRENT, shift);
          bool breakoutRes = (prevLow <= g_Boxes[i].top && currLow > g_Boxes[i].top);
          
          // Resistance hold = SELL signal (retest)
          bool resHolds = (prevHigh >= g_Boxes[i].bottom && currHigh < g_Boxes[i].bottom);
          
-         if(breakoutRes) Print("            🟢 Resistance BREAKOUT detected! Top= "+DoubleToString(g_Boxes[i].top,_Digits));
-         if(resHolds) Print("            🔴 Resistance HOLD detected! Bottom= "+DoubleToString(g_Boxes[i].bottom,_Digits));
+         if(breakoutRes) Logging("            🟢 Resistance BREAKOUT detected! Top= "+DoubleToString(g_Boxes[i].top,_Digits));
+         if(resHolds) Logging("            🔴 Resistance HOLD detected! Bottom= "+DoubleToString(g_Boxes[i].bottom,_Digits));
          
          if(breakoutRes && !g_Boxes[i].is_broken)
          {
             g_Boxes[i].is_broken = true;
             g_ResIsSupport = true;
-            Print("            ⚡ Resistance broken! Checking trade conditions...");
+            Logging("            ⚡ Resistance broken! Checking trade conditions...");
             
             // Update box visual
             UpdateBoxVisual(i, true);
-            CreateVisualMarker(iTime(_Symbol, timeframe, shift), g_Boxes[i].top, "RES", true);
+            // CreateVisualMarker(iTime(_Symbol, timeframe, shift), g_Boxes[i].top, "RES", true);
             
             // BUY on resistance break
-            if(InpTradeBreakouts && InpBuySignals && !g_Boxes[i].traded)
+            if(InpTradeBreakouts && InpBuySignals && !g_Boxes[i].traded && !g_Boxes[i].is_disabled)
             {
                // Print("            ➤ Opening BUY on resistance break");
                CreateBreakoutLabel(iTime(_Symbol, timeframe, shift), g_Boxes[i].top, "Break Res", true);
                // OpenTrade(ORDER_TYPE_BUY, "Resistance Break", g_Boxes[i].bottom);
                // CheckForBreakout(i);
                g_Boxes[i].traded = true;
+               Print("  Is Breakout: ", IsBreakout);
             }
             else
             {
@@ -479,19 +541,20 @@ void CheckTradingSignals(ENUM_TIMEFRAMES timeframe, int shift,
          {
             g_Boxes[i].is_broken = false;
             g_ResIsSupport = false;
-            Print("            ⚡ Resistance held! Checking trade conditions...");
+            Logging("            ⚡ Resistance held! Checking trade conditions...");
             
             // Update box visual
             UpdateBoxVisual(i, false);
-            CreateVisualMarker(iTime(_Symbol, timeframe, shift), g_Boxes[i].bottom, "RES", false);
+            // CreateVisualMarker(iTime(_Symbol, timeframe, shift), g_Boxes[i].bottom, "RES", false);
             
             // SELL on resistance hold
-            if(InpTradeRetests && InpSellSignals)
+            if(InpTradeRetests && InpSellSignals && !g_Boxes[i].is_disabled)
             {
                // Print("            ➤ Opening SELL on resistance hold");
                // OpenTrade(ORDER_TYPE_SELL, "Resistance Hold", g_Boxes[i].top);
                // CheckForHold(i);
                // g_Boxes[i].traded = true;
+               Print("  Is Hold: ", IsHold);
             }
             else
             {
@@ -504,6 +567,7 @@ void CheckTradingSignals(ENUM_TIMEFRAMES timeframe, int shift,
          {
             // Reset broken status if resistance held after being broken
             g_Boxes[i].is_reheld = true;
+            g_Boxes[i].is_disabled = true;  // Disable box for new trades
             g_Boxes[i].is_broken = false;
             g_ResIsSupport = false;
             // g_Boxes[i].traded = false;
@@ -516,11 +580,11 @@ void CheckTradingSignals(ENUM_TIMEFRAMES timeframe, int shift,
             // g_Boxes[i].buyOnBreakout_limit = 4;
             // holdLimit = 100;
             // breakLimit = 100;
-            Logging("            ⚡ Resistance re-held after break!");
+            Logging("            ⚡ Resistance re-held after break! Box disabled for trading.");
             
             // Update box visual
             UpdateBoxVisual(i, false);
-            CreateVisualMarker(iTime(_Symbol, timeframe, shift), g_Boxes[i].bottom, "RES", false);
+            // CreateVisualMarker(iTime(_Symbol, timeframe, shift), g_Boxes[i].bottom, "RES", false);
          }
       }
    }
@@ -536,21 +600,35 @@ void CheckTradingSignals(ENUM_TIMEFRAMES timeframe, int shift,
          {} // Print("      ⚠️ Failed to extend box: ", g_Boxes[i].name, " Error: ", GetLastError());
       }
 
+      if(g_Boxes[i].is_reheld)
+      {
+         if(BOS.boxIndex==i)
+         {
+            waitingForPullback = false;
+            BOS.isActive = false;
+         }
+         g_Boxes[i].drawn = false;
+      }
+
       // int buy_Limit = g_Boxes[i].buyOnHold_limit;
       // int sell_Limit = g_Boxes[i].sellOnHold_limit;
-      // if(g_Boxes[i].is_reheld && (g_Boxes[i].buyOnHold_count >= buy_Limit || g_Boxes[i].sellOnHold_count >= sell_Limit))
+      // Re-held boxes are now just disabled, not deleted
+      // if(g_Boxes[i].is_reheld)
       // {
       //    // Print("      ⚡ Removing re-held box after hold limit reached: ", g_Boxes[i].name);
       //    // Delete box visuals
       //    ObjectDelete(0, g_Boxes[i].name);
       //    ObjectDelete(0, g_Boxes[i].name + "_label");
-         
+      //    
       //    // Remove box from array
       //    for(int j = i; j < g_BoxCount - 1; j++)
       //       g_Boxes[j] = g_Boxes[j + 1];
       //    g_BoxCount--;
       //    i--; // Adjust index after removal
       // }
+      // Update trailing stop for this box's trades if enabled - MOVED TO OnTick() for better performance
+      // if(InpUseTrailingStop)
+      //    ApplyTrailingStop(magicNumber);
    }
 }
 
@@ -686,10 +764,20 @@ void AddBoxAtTime(ENUM_TIMEFRAMES timeframe, datetime leftTime, double top, doub
       ObjectDelete(0, g_Boxes[0].name);
       ObjectDelete(0, g_Boxes[0].name + "_label");
       
-      // Remove oldest box
+      // Remove oldest box and shift all boxes down
       for(int i = 0; i < MAX_BOXES - 1; i++)
          g_Boxes[i] = g_Boxes[i + 1];
       g_BoxCount = MAX_BOXES - 1;
+      
+      // Update all box labels with new indices after shift
+      for(int i = 0; i < g_BoxCount; i++)
+      {
+         string labelName = g_Boxes[i].name + "_label";
+         if(ObjectFind(0, labelName) >= 0)
+         {
+            ObjectSetString(0, labelName, OBJPROP_TEXT, "Vol: " + DoubleToString(g_Boxes[i].volume, 0) + " Box: " + IntegerToString(i + 1));
+         }
+      }
    }
    
    datetime currentTime = TimeCurrent();
@@ -707,6 +795,7 @@ void AddBoxAtTime(ENUM_TIMEFRAMES timeframe, datetime leftTime, double top, doub
    g_Boxes[g_BoxCount].is_support = isSupport;
    g_Boxes[g_BoxCount].is_broken = false;
    g_Boxes[g_BoxCount].is_reheld = false;
+   g_Boxes[g_BoxCount].is_disabled = false;
    g_Boxes[g_BoxCount].traded = false;
    g_Boxes[g_BoxCount].traded_count = 0;
    g_Boxes[g_BoxCount].hold_count = 0;
@@ -835,6 +924,26 @@ bool ExtendBoxVisual(const long chart_id,
 }
 
 //+------------------------------------------------------------------+
+//| Extend BOS Level Line                                            |
+//+------------------------------------------------------------------+
+bool ExtendBOSLevel(datetime time, double price)
+{
+   string objName = BOS.isBullish ? "BULLISH BOS" : "BEARISH BOS";
+   datetime extend_time = time + 10 * PeriodSeconds(PERIOD_CURRENT);
+//--- reset the error value
+   ResetLastError();
+//--- move trend line's anchor point
+   if(!ObjectMove(0,objName,1,extend_time,price))
+     {
+      Print(__FUNCTION__,
+            ": failed to move the anchor point! Error code = ",GetLastError());
+      return(false);
+     }
+//--- successful execution
+   return true;
+}
+
+//+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
 void HideBox(int index)
 {
@@ -843,6 +952,9 @@ void HideBox(int index)
       
    if(g_Boxes[index].name == "" || !g_Boxes[index].drawn)
       return;
+
+   if(BOS.isActive && BOS.boxIndex == index)
+      ObjectSetInteger(0, BOS.name, OBJPROP_TIMEFRAMES, OBJ_NO_PERIODS);
       
    ObjectSetInteger(0, g_Boxes[index].name, OBJPROP_TIMEFRAMES, OBJ_NO_PERIODS);
    ObjectSetInteger(0, g_Boxes[index].name + "_label", OBJPROP_TIMEFRAMES, OBJ_NO_PERIODS);
@@ -857,6 +969,9 @@ void ShowBox(int index)
       
    if(g_Boxes[index].name == "" || !g_Boxes[index].drawn)
       return;
+
+   if(BOS.isActive && BOS.boxIndex == index)
+      ObjectSetInteger(0, BOS.name, OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
       
    ObjectSetInteger(0, g_Boxes[index].name, OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
    ObjectSetInteger(0, g_Boxes[index].name + "_label", OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
@@ -1017,49 +1132,183 @@ void CreateBreakoutLabel(datetime time, double price, string text, bool isUp)
 }
 
 //+------------------------------------------------------------------+
-//| Check for Entry after Pullback (BOS)                             |
+//| Draw BOS Level on Chart                                          |
+//+------------------------------------------------------------------+
+void DrawBOSLevel(string objName, double price, datetime time, bool isBullish=true)
+{
+   // string objName = name;
+   //--- set time1 and time2 for trend line
+   datetime currentTime = TimeCurrent();
+   //--- set time1 to previous 5 bars from BOS detection
+   datetime time1 = time - 5 * PeriodSeconds(PERIOD_CURRENT);
+   //--- set time2 to 5 bars ahead of current time
+   datetime time2 = currentTime + 10 * PeriodSeconds(PERIOD_CURRENT);
+
+   //--- Delete old object if exists to redraw at new level
+   if(ObjectFind(0, objName) >= 0) {
+      ObjectDelete(0, objName);
+   }
+   //--- Create trend line object
+   ObjectCreate(0, objName, OBJ_TREND, 0, time1, price, time2, price);
+   ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+   if(isBullish)
+      ObjectSetInteger(0, objName, OBJPROP_COLOR, clrDodgerBlue);
+   else
+      ObjectSetInteger(0, objName, OBJPROP_COLOR, clrDarkOrange);
+   ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_DASH);
+   ObjectSetInteger(0, objName, OBJPROP_WIDTH, 3);
+   ObjectSetInteger(0, objName, OBJPROP_RAY_RIGHT, false); 
+}
+
+//+------------------------------------------------------------------+
+//| Check for BOS on Low Timeframe with box type validation          |
+//+------------------------------------------------------------------+
+void CheckForBOS(int boxIndex)
+{
+   if(boxIndex < 0 || boxIndex >= g_BoxCount)
+   {
+      Print("CheckForBOS: Invalid box index ", boxIndex);
+      return;
+   }
+
+   if(!g_Boxes[g_ActiveBoxIndex].drawn)
+      return;
+   
+   if(!L_LastHigh.isValid || !L_LastLow.isValid)
+   {
+      Print("CheckForBOS: Low TF pivots not valid - High:", L_LastHigh.isValid, " Low:", L_LastLow.isValid);
+      return;
+   }
+   
+   double currentClose = iClose(_Symbol, InpLowTF, 0);
+   
+   // Determine trade direction based on which signal type we have and the actual box properties
+   bool isBuySignal = false;
+   bool isSellSignal = false;
+   
+   // Use the actual box's properties to determine signal direction
+   bool isSupport = g_Boxes[boxIndex].is_support;
+   bool isBroken = g_Boxes[boxIndex].is_broken;
+   
+   // if(!BOS.isActive)
+   // {
+   //    Logging("=== CheckForBOS Debug (Box "+IntegerToString(boxIndex+1)+") ===");
+   //    Logging("Box Type: "+(isSupport ? "SUPPORT" : "RESISTANCE")+" | Broken: "+(isBroken ? "YES" : "NO"));
+   //    Logging("Current Close: "+DoubleToString(currentClose, _Digits)+" | L_LastHigh: "+DoubleToString(L_LastHigh.price, _Digits)+" | L_LastLow: "+DoubleToString(L_LastLow.price, _Digits));
+   //    Logging("Current BOS - Active: "+(BOS.isActive ? "YES" : "NO")+" | Bullish: "+(BOS.isBullish ? "YES" : "NO")+" | Price: "+DoubleToString(BOS.price, _Digits)+"\n");
+   // }
+   
+   // Determine required BOS direction based on box type and state
+   bool needBullishBOS = false;
+   bool needBearishBOS = false;
+
+
+   if(IsBreakout)
+   {
+      // Breakout logic based on box type:
+      // - Resistance breakout (broken resistance) = need bullish BOS
+      // - Support breakout (broken support) = need bearish BOS
+      if(!isSupport && isBroken) // Resistance broke
+         needBullishBOS = true;
+      else if(isSupport && isBroken) // Support broke
+         needBearishBOS = true;
+   }
+   else if(IsHold)
+   {
+      // Hold logic based on box type:
+      // - Support hold (unbroken support) = need bullish BOS
+      // - Resistance hold (unbroken resistance) = need bearish BOS
+      if(isSupport && !isBroken) // Support held
+         needBullishBOS = true;
+      else if(!isSupport && !isBroken) // Resistance held
+         needBearishBOS = true;
+   }
+   
+   if(needBullishBOS)
+   {
+      if(L_LastHigh.isValid)
+      {
+         if(currentClose > L_LastHigh.price && !BOS.isActive)
+         {
+            Logging("→ TRIGGERING BULLISH BOS!");
+            BOS.name = "BULLISH BOS";
+            BOS.isBullish = true;
+            BOS.price = L_LastHigh.price;
+            BOS.time = TimeCurrent();
+            BOS.isActive = true;
+            BOS.barIndex = 0;
+            BOS.boxIndex = boxIndex;
+            BOS.magicNumber = InpBOSMagicNumber+(int)DoubleToString(BOS.price,0); // Unique magic number per BOS level
+            waitingForPullback = true;
+            
+            string boxType = isSupport ? "Support" : "Resistance";
+            string signal = isBroken ? "Breakout" : "Hold";
+            Logging("🟢 BULLISH BOS detected for "+boxType+" "+signal+" at "+DoubleToString(BOS.price, _Digits)+" (Box "+IntegerToString(boxIndex+1)+")");
+            DrawBOSLevel(BOS.name, BOS.price, BOS.time, true);
+         }
+      }
+   }
+   if(needBearishBOS)
+   {
+      if(L_LastLow.isValid)
+      {
+         if(currentClose < L_LastLow.price && !BOS.isActive)
+         {
+            Logging("→ TRIGGERING BEARISH BOS!");
+            BOS.name = "BEARISH BOS";
+            BOS.isBullish = false;
+            BOS.price = L_LastLow.price;
+            BOS.time = TimeCurrent();
+            BOS.isActive = true;
+            BOS.barIndex = 0;
+            BOS.boxIndex = boxIndex;
+            BOS.magicNumber = InpBOSMagicNumber+(int)DoubleToString(BOS.price,0); // Unique magic number per BOS level
+            waitingForPullback = true;
+            
+            string boxType = isSupport ? "Support" : "Resistance";
+            string signal = isBroken ? "Breakout" : "Hold";
+            Logging("🔴 BEARISH BOS detected for "+boxType+" "+signal+" at "+DoubleToString(BOS.price, _Digits)+" (Box "+IntegerToString(boxIndex+1)+")");
+            DrawBOSLevel(BOS.name, BOS.price, BOS.time, false);
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check for entry after BOS pullback                               |
 //+------------------------------------------------------------------+
 void CheckForEntry()
 {
+   // Skip if box entry is being processed
+   if(g_ActiveBoxIndex >= 0)
+      return;
+   
    double currentPrice = iClose(_Symbol, InpLowTF, 0);
    double point = _Point;
    int minPullback = InpBOSPullbackPoints;
    
-   // Determine if trend check is required
-   bool checkTrend = InpEnableSupertrend;
-   
    // Bullish entry: Wait for pullback to BOS level
    if(BOS.isBullish && waitingForPullback)
    {
-      // Check trend alignment if supertrend filter is enabled
-      if(checkTrend)
-      {
-         // If swing trend is sideways, check daily trend
-         if(swH_Trend == TREND_SIDEWAYS)
-         {
-            // Only proceed if daily trend is bullish and market is clear
-            if(D_Trend != TREND_BULLISH || D_MarketCondition != CLEAR_AND_STRONG_TREND)
-               return;
-         }
-         // If swing trend is not sideways, it must be bullish
-         else if(swH_Trend != TREND_BULLISH)
-            return;
-      }
-      
       // Check trade direction filter
       if(InpTradeDirection == TRADE_SELL_ONLY)
          return;
       
       // Check if opposite positions exist
-      if(InpBlockOppositeEntry && GetOpenPositionsCount(POSITION_TYPE_SELL, InpBOSMagicNumber) > 0)
+      if(InpBlockOppositeEntry && GetOpenPositionsCount(POSITION_TYPE_SELL, BOS.magicNumber) > 0)
       {
          Print("Blocked BUY entry - SELL positions already open");
          return;
       }
       
       // Check max buy trades limit
-      if(GetOpenPositionsCount(POSITION_TYPE_BUY, InpBOSMagicNumber) >= InpMaxBuyOnBOS)
+      if(GetOpenPositionsCount(POSITION_TYPE_BUY, BOS.magicNumber) >= InpMaxBuyOnBOS)
+      {
+         // Reset BOS to allow opposite direction BOS to trigger
+         // waitingForPullback = false;
+         // BOS.isActive = false;
          return;
+      }
       
       // Check if price pulled back near BOS level
       double distancePoints = MathAbs(currentPrice - BOS.price) / point;
@@ -1070,72 +1319,44 @@ void CheckForEntry()
          double prevClose = iClose(_Symbol, InpLowTF, 1);
          double prevOpen = iOpen(_Symbol, InpLowTF, 1);
          
-         Print("Bullish pullback detected - Distance: ", distancePoints, " points | Candle: ", (prevClose > prevOpen ? "Bullish" : "Bearish"));
-         
-         if(prevClose > prevOpen) // Bullish confirmation candle
+         if(prevClose > prevOpen)
          {
-            Logging("Executing BUY trade at pullback to BOS level");
-            Logging("   Swing Trend: " + TrendToString(swH_Trend) + 
-                  " | Daily Trend: " + TrendToString(D_Trend));
-            Logging("   Swing Strategy: " + TradingStrategyToString(swH_Strategy) + 
-                  " | Daily Strategy: " + TradingStrategyToString(D_Strategy));
-            ExecuteBuyTrade(0, InpBOSMagicNumber);
+            Logging("Executing BUY trade at BOS pullback");
+            ExecuteBuyTrade(0, BOS.magicNumber);
          }
       }
    }
-   
-   // Bearish entry: Wait for pullback to BOS level
+   // Bearish entry
    else if(!BOS.isBullish && waitingForPullback)
    {
-      // Check trend alignment if supertrend filter is enabled
-      if(checkTrend)
-      {
-         // If swing trend is sideways, check daily trend
-         if(swH_Trend == TREND_SIDEWAYS)
-         {
-            // Only proceed if daily trend is bearish and market is clear
-            if(D_Trend != TREND_BEARISH || D_MarketCondition != CLEAR_AND_STRONG_TREND)
-               return;
-         }
-         // If swing trend is not sideways, it must be bearish
-         else if(swH_Trend != TREND_BEARISH)
-            return;
-      }
-      
-      // Check trade direction filter
       if(InpTradeDirection == TRADE_BUY_ONLY)
          return;
       
-      // Check if opposite positions exist
-      if(InpBlockOppositeEntry && GetOpenPositionsCount(POSITION_TYPE_BUY, InpBOSMagicNumber) > 0)
+      if(InpBlockOppositeEntry && GetOpenPositionsCount(POSITION_TYPE_BUY, BOS.magicNumber) > 0)
       {
          Print("Blocked SELL entry - BUY positions already open");
          return;
       }
       
-      // Check max sell trades limit
-      if(GetOpenPositionsCount(POSITION_TYPE_SELL, InpBOSMagicNumber) >= InpMaxSellOnBOS)
+      if(GetOpenPositionsCount(POSITION_TYPE_SELL, BOS.magicNumber) >= InpMaxSellOnBOS)
+      {
+         // Reset BOS to allow opposite direction BOS to trigger
+         // waitingForPullback = false;
+         // BOS.isActive = false;
          return;
+      }
       
-      // Check if price pulled back near BOS level
       double distancePoints = MathAbs(currentPrice - BOS.price) / point;
       
       if(distancePoints <= minPullback)
       {
-         // Confirm with recent bearish candle
          double prevClose = iClose(_Symbol, InpLowTF, 1);
          double prevOpen = iOpen(_Symbol, InpLowTF, 1);
          
-         Print("Bearish pullback detected - Distance: ", distancePoints, " points | Candle: ", (prevClose < prevOpen ? "Bearish" : "Bullish"));
-         
-         if(prevClose < prevOpen) // Bearish confirmation candle
+         if(prevClose < prevOpen)
          {
-            Logging("Executing SELL trade at pullback to BOS level");
-            Logging("   Swing Trend: " + TrendToString(swH_Trend) + 
-                  " | Daily Trend: " + TrendToString(D_Trend));
-            Logging("   Swing Strategy: " + TradingStrategyToString(swH_Strategy) + 
-                  " | Daily Strategy: " + TradingStrategyToString(D_Strategy));
-            ExecuteSellTrade(0, InpBOSMagicNumber);
+            Logging("Executing SELL trade at BOS pullback");
+            ExecuteSellTrade(0, BOS.magicNumber);
          }
       }
    }
@@ -1154,29 +1375,29 @@ void CheckForBreakout(int boxIndex)
    // if(IsReHeld)
    //    return;
    
-   // Check strategy alignment - prefer BREAKOUT_TRADING or TREND_FOLLOWER strategies
-   bool strategyAligned = false;
+   // // Check strategy alignment - prefer BREAKOUT_TRADING or TREND_FOLLOWER strategies
+   // bool strategyAligned = false;
    
-   // Check if any timeframe suggests breakout trading
-   if(swH_Strategy == BREAKOUT_TRADING || swH_SecondaryStrategy == BREAKOUT_TRADING)
-      strategyAligned = true;
-   else if(D_Strategy == BREAKOUT_TRADING || D_SecondaryStrategy == BREAKOUT_TRADING)
-      strategyAligned = true;
-   // Trend following also benefits from breakouts
-   else if(swH_Strategy == TREND_FOLLOWER || D_Strategy == TREND_FOLLOWER)
-      strategyAligned = true;
+   // // Check if any timeframe suggests breakout trading
+   // if(swH_Strategy == BREAKOUT_TRADING || swH_SecondaryStrategy == BREAKOUT_TRADING)
+   //    strategyAligned = true;
+   // else if(D_Strategy == BREAKOUT_TRADING || D_SecondaryStrategy == BREAKOUT_TRADING)
+   //    strategyAligned = true;
+   // // Trend following also benefits from breakouts
+   // else if(swH_Strategy == TREND_FOLLOWER || D_Strategy == TREND_FOLLOWER)
+   //    strategyAligned = true;
    
-   if(!strategyAligned)
-   {
-      Print("Breakout blocked - Strategy not aligned (SW: ", TradingStrategyToString(swH_Strategy), 
-            ", D: ", TradingStrategyToString(D_Strategy), ")");
-      return;
-   }
+   // if(!strategyAligned)
+   // {
+   //    Print("Breakout blocked on Box ", IntegerToString(boxIndex+1), " - Strategy not aligned (SW: ", TradingStrategyToString(swH_Strategy), 
+   //          ", D: ", TradingStrategyToString(D_Strategy), ")");
+   //    return;
+   // }
    
    // Set flags to signal valid breakout detected
    IsBreakout = true;
    g_ActiveBoxIndex = boxIndex;
-   // Print("✓ Breakout validated - Strategy aligned (Box ", boxIndex, ")");
+      
    
    // Immediately validate and execute if conditions met
    CheckEntryLevel();
@@ -1195,32 +1416,32 @@ void CheckForHold(int boxIndex)
    // if(IsReHeld)
    //    return;
 
-   // Check strategy alignment - prefer RANGE_TRADING, SWING_TRADING strategies
-   bool strategyAligned = false;
+   // // Check strategy alignment - prefer RANGE_TRADING, SWING_TRADING strategies
+   // bool strategyAligned = false;
    
-   // Range trading benefits most from holds/retests
-   if(swH_Strategy == RANGE_TRADING || swH_SecondaryStrategy == RANGE_TRADING)
-      strategyAligned = true;
-   else if(D_Strategy == RANGE_TRADING || D_SecondaryStrategy == RANGE_TRADING)
-      strategyAligned = true;
-   // Swing trading also uses retests
-   else if(swH_Strategy == SWING_TRADING || D_Strategy == SWING_TRADING)
-      strategyAligned = true;
-   // Trend followers can use retests in pullbacks
-   else if(swH_Strategy == TREND_FOLLOWER && swH_MarketCondition == CLEAR_AND_STRONG_TREND)
-      strategyAligned = true;
+   // // Range trading benefits most from holds/retests
+   // if(swH_Strategy == RANGE_TRADING || swH_SecondaryStrategy == RANGE_TRADING)
+   //    strategyAligned = true;
+   // else if(D_Strategy == RANGE_TRADING || D_SecondaryStrategy == RANGE_TRADING)
+   //    strategyAligned = true;
+   // // Swing trading also uses retests
+   // else if(swH_Strategy == SWING_TRADING || D_Strategy == SWING_TRADING)
+   //    strategyAligned = true;
+   // // Trend followers can use retests in pullbacks
+   // else if(swH_Strategy == TREND_FOLLOWER && swH_MarketCondition == CLEAR_AND_STRONG_TREND)
+   //    strategyAligned = true;
    
-   if(!strategyAligned)
-   {
-      Print("Hold/Retest blocked - Strategy not aligned (SW: ", TradingStrategyToString(swH_Strategy),
-            ", D: ", TradingStrategyToString(D_Strategy), ")");
-      return;
-   }
+   // if(!strategyAligned)
+   // {
+   //    Print("Hold/Retest blocked on Box ", IntegerToString(boxIndex+1), " - Strategy not aligned (SW: ", TradingStrategyToString(swH_Strategy),
+   //          ", D: ", TradingStrategyToString(D_Strategy), ")");
+   //    return;
+   // }
    
    // Set flags to signal valid hold detected
    IsHold = true;
    g_ActiveBoxIndex = boxIndex;
-   // Print("✓ Hold/Retest validated - Strategy aligned (Box ", boxIndex, ")");
+   // Print("✓ Hold/Retest validated - Strategy aligned (Box ", boxIndex+1, ")");
    
    // Immediately validate and execute if conditions met
    CheckEntryLevel();
@@ -1262,97 +1483,17 @@ bool CheckTrendConditions(int boxIndex, bool isBuySignal)
    {
       bool trendAligned = false;
       
-      if(W_Trend == TREND_BEARISH)
+      if(D_Trend == TREND_BEARISH)
       {
-         if(D_Trend == TREND_BULLISH && D_Strategy == TREND_FOLLOWER)
-            trendAligned = true; // Allow if daily is bullish trend follower
-         else if(D_Trend == TREND_SIDEWAYS && D_Strategy == RANGE_TRADING)
-         {
-            if(isSupport && !isBroken) // Support held
-            {
-               g_Boxes[g_ActiveBoxIndex].buyOnHold_limit = 4; // Increase buy on hold limit
-               g_Boxes[g_ActiveBoxIndex].box_hold_limit += 1; // Slightly increase hold limit
-               trendAligned = true;
-            }
-            else
-            {
-               g_Boxes[g_ActiveBoxIndex].buyOnHold_limit = 2; // Reset buy on hold limit if conditions not met
-               // trendAligned = false;
-            }
-         }
-         else if(swH_Trend == TREND_SIDEWAYS && swH_Strategy == RANGE_TRADING)
-         {
-            if(g_Boxes[g_ActiveBoxIndex].is_reheld) // Support held
-            {
-               g_Boxes[g_ActiveBoxIndex].buyOnHold_limit = 6; // Increase buy on hold limit
-               // g_Boxes[g_ActiveBoxIndex].box_hold_limit += 1; // Slightly increase hold limit
-               trendAligned = true;
-            }
-            else
-               trendAligned = false;
-         }
-      }
-      else if(W_Trend == TREND_SIDEWAYS)
-      {
-         if(D_Trend == TREND_BULLISH && D_Strategy == TREND_FOLLOWER)
-            if(g_Boxes[g_ActiveBoxIndex].is_reheld)
-            {
-               if(!isSupport && isBroken) // Resistance re-broke
-               {
-                  g_Boxes[g_ActiveBoxIndex].buyOnBreakout_limit = 4; // Increase buy on breakout limit after re-break
-                  g_Boxes[g_ActiveBoxIndex].box_break_limit += 1; // Slightly increase break limit
-                  trendAligned = true;
-               }
-               Print("Hai");
-               g_Boxes[g_ActiveBoxIndex].buyOnHold_limit = 8; // Increase buy on hold limit after re-hold
-               g_Boxes[g_ActiveBoxIndex].box_hold_limit += 1; // Slightly increase hold limit
-               trendAligned = true;
 
-            }
-            else
-            {
-               g_Boxes[g_ActiveBoxIndex].buyOnHold_limit = 2; // Reset buy on hold limit if not re-held
-               g_Boxes[g_ActiveBoxIndex].box_hold_limit = 2; // Reset hold limit
-               trendAligned = true;
-            }
-         else if(D_Trend == TREND_SIDEWAYS && D_Strategy == RANGE_TRADING)
-         {
-            if(isSupport && !isBroken) // Support held
-            {
-               if(snrH_Trend != TREND_BEARISH)
-               {
-                  g_Boxes[g_ActiveBoxIndex].buyOnHold_limit = 4;
-                  g_Boxes[g_ActiveBoxIndex].box_hold_limit += 1; // Slightly increase hold limit
-                  trendAligned = true;
-               }
-            }
-            else if(!isSupport && isBroken && swH_Trend == TREND_BULLISH) // Resistance broke
-            {
-               if(!g_Boxes[g_ActiveBoxIndex].is_reheld) // Only if not re-held
-               {
-                  g_Boxes[g_ActiveBoxIndex].buyOnBreakout_limit = 2;
-                  g_Boxes[g_ActiveBoxIndex].box_break_limit = 2; // Slightly increase hold limit
-                  trendAligned = true;
-               }
-               else if(g_Boxes[g_ActiveBoxIndex].is_reheld)
-               {
-                  g_Boxes[g_ActiveBoxIndex].buyOnBreakout_limit = 4;
-                  g_Boxes[g_ActiveBoxIndex].box_break_limit += 1; // Slightly increase hold limit
-                  trendAligned = true;
-               }
-            }
-            else
-            {
-               g_Boxes[g_ActiveBoxIndex].buyOnHold_limit = 2; // Reset buy on hold limit if conditions not met
-               g_Boxes[g_ActiveBoxIndex].buyOnBreakout_limit = 2; // Reset buy on breakout limit if conditions not met
-               trendAligned = false;
-            }
-         }
       }
-      else // W_Trend == TREND_BULLISH
+      else if(D_Trend == TREND_SIDEWAYS)
       {
-         if(D_Trend == TREND_BULLISH && D_Strategy == TREND_FOLLOWER)
-            trendAligned = true;
+
+      }
+      else // D_Trend == TREND_BULLISH
+      {
+         trendAligned = true;
       }
       
       if(!trendAligned)
@@ -1372,96 +1513,16 @@ bool CheckTrendConditions(int boxIndex, bool isBuySignal)
    {
       bool trendAligned = false;
       
-      if(W_Trend == TREND_BULLISH)
+      if(D_Trend == TREND_BULLISH)
       {
-         if(D_Trend == TREND_BEARISH && D_Strategy == TREND_FOLLOWER)
-            trendAligned = true;
-         else if(D_Trend == TREND_SIDEWAYS && D_Strategy == RANGE_TRADING)
-         {
-            if(!isSupport && !isBroken) // Resistance held
-            {
-               g_Boxes[g_ActiveBoxIndex].sellOnHold_limit = 4; // Increase sell on hold limit
-               g_Boxes[g_ActiveBoxIndex].box_hold_limit += 1; // Slightly increase hold limit
-               trendAligned = true;
-            }
-            else
-            {
-               g_Boxes[g_ActiveBoxIndex].sellOnHold_limit = 2; // Reset sell on hold limit if conditions not met
-               // trendAligned = false;
-            }
-         }
-         else if(swH_Trend == TREND_SIDEWAYS && swH_Strategy == RANGE_TRADING)
-         {
-            if(g_Boxes[g_ActiveBoxIndex].is_reheld) // Resistance held
-            {
-               g_Boxes[g_ActiveBoxIndex].sellOnHold_limit = 6; // Increase sell on hold limit
-               // g_Boxes[g_ActiveBoxIndex].box_hold_limit += 1; // Slightly increase hold limit
-               trendAligned = true;
-            }
-            else
-               trendAligned = false;
-         }
       }
-      else if(W_Trend == TREND_SIDEWAYS)
+      else if(D_Trend == TREND_SIDEWAYS)
       {
-         if(D_Trend == TREND_BEARISH && D_Strategy == TREND_FOLLOWER)
-            if(g_Boxes[g_ActiveBoxIndex].is_reheld)
-            {
-               if(isSupport && isBroken) // Support re-broke
-               {
-                  g_Boxes[g_ActiveBoxIndex].sellOnBreakout_limit = 4; // Increase sell on breakout limit after re-break
-                  g_Boxes[g_ActiveBoxIndex].box_break_limit += 1; // Slightly increase break limit
-                  trendAligned = true;
-               }
 
-               g_Boxes[g_ActiveBoxIndex].sellOnHold_limit = 8; // Increase sell on hold limit after re-hold
-               g_Boxes[g_ActiveBoxIndex].box_hold_limit += 1; // Slightly increase hold limit
-               trendAligned = true;
-
-            }
-            else
-            {
-               g_Boxes[g_ActiveBoxIndex].sellOnHold_limit = 2; // Reset sell on hold limit if not re-held
-               trendAligned = true;
-            }
-         else if(D_Trend == TREND_SIDEWAYS && D_Strategy == RANGE_TRADING)
-         {
-            if(!isSupport && !isBroken) // Resistance held
-            {
-               if(snrH_Trend != TREND_BULLISH)
-               {
-                  g_Boxes[g_ActiveBoxIndex].sellOnHold_limit = 4;
-                  g_Boxes[g_ActiveBoxIndex].box_hold_limit += 1; // Slightly increase hold limit
-                  trendAligned = true;
-               }
-            }
-            else if(isSupport && isBroken && swH_Trend == TREND_BEARISH) // Support broke
-            {
-               if(!g_Boxes[g_ActiveBoxIndex].is_reheld) // Only if not re-held
-               {
-                  g_Boxes[g_ActiveBoxIndex].sellOnBreakout_limit = 2;
-                  g_Boxes[g_ActiveBoxIndex].box_break_limit = 2; // Slightly increase hold limit
-                  trendAligned = true;
-               }
-               else if(g_Boxes[g_ActiveBoxIndex].is_reheld)
-               {
-                  g_Boxes[g_ActiveBoxIndex].sellOnBreakout_limit = 4;
-                  g_Boxes[g_ActiveBoxIndex].box_break_limit += 1; // Slightly increase hold limit
-                  trendAligned = true;
-               }
-            }
-            else
-            {
-               g_Boxes[g_ActiveBoxIndex].sellOnHold_limit = 2; // Reset sell on hold limit if conditions not met
-               g_Boxes[g_ActiveBoxIndex].sellOnBreakout_limit = 2; // Reset sell on breakout limit if conditions not met
-               trendAligned = false;
-            }
-         }
       }
-      else // W_Trend == TREND_BEARISH
+      else // D_Trend == TREND_BEARISH
       {
-         if(D_Trend == TREND_BEARISH && D_Strategy == TREND_FOLLOWER)
-            trendAligned = true;
+         trendAligned = true;
       }
       
       if(!trendAligned)
@@ -1485,24 +1546,31 @@ void CheckEntryLevel()
 {
    // Must have either breakout or hold signal
    if(!IsBreakout && !IsHold)
-      return;
-   
-   // Check if box has been traded maximum times based on signal type
-   if(g_ActiveBoxIndex >= 0)
    {
-      if(IsBreakout && g_Boxes[g_ActiveBoxIndex].break_count >= g_Boxes[g_ActiveBoxIndex].box_break_limit)
-      {
-         Print("Trade blocked - Box already traded ", g_Boxes[g_ActiveBoxIndex].break_count, " breakouts (max "+IntegerToString(g_Boxes[g_ActiveBoxIndex].box_break_limit)+") (Box "+IntegerToString(g_ActiveBoxIndex+1)+")");
-         ResetEntryFlags();
-         return;
-      }
-      if(IsHold && g_Boxes[g_ActiveBoxIndex].hold_count >= g_Boxes[g_ActiveBoxIndex].box_hold_limit)
-      {
-         Print("Trade blocked - Box already traded ", g_Boxes[g_ActiveBoxIndex].hold_count, " holds (max "+IntegerToString(g_Boxes[g_ActiveBoxIndex].box_hold_limit)+") (Box "+IntegerToString(g_ActiveBoxIndex+1)+")");
-         ResetEntryFlags();
-         return;
-      }
+      // Defensive: ensure flags are reset even if called incorrectly
+      g_ActiveBoxIndex = -1;
+      return;
    }
+   
+   // Store box index for this validation attempt
+   int processingBoxIndex = g_ActiveBoxIndex;
+   
+   // // Check if box has been traded maximum times based on signal type
+   // if(g_ActiveBoxIndex >= 0)
+   // {
+   //    if(IsBreakout && g_Boxes[g_ActiveBoxIndex].break_count >= g_Boxes[g_ActiveBoxIndex].box_break_limit)
+   //    {
+   //       Print("Trade blocked - Box already traded ", g_Boxes[g_ActiveBoxIndex].break_count, " breakouts (max "+IntegerToString(g_Boxes[g_ActiveBoxIndex].box_break_limit)+") (Box "+IntegerToString(g_ActiveBoxIndex+1)+")");
+   //       ResetEntryFlags();
+   //       return;
+   //    }
+   //    if(IsHold && g_Boxes[g_ActiveBoxIndex].hold_count >= g_Boxes[g_ActiveBoxIndex].box_hold_limit)
+   //    {
+   //       Print("Trade blocked - Box already traded ", g_Boxes[g_ActiveBoxIndex].hold_count, " holds (max "+IntegerToString(g_Boxes[g_ActiveBoxIndex].box_hold_limit)+") (Box "+IntegerToString(g_ActiveBoxIndex+1)+")");
+   //       ResetEntryFlags();
+   //       return;
+   //    }
+   // }
    
    // Determine trade direction based on which signal type we have and the actual box properties
    bool isBuySignal = false;
@@ -1579,7 +1647,7 @@ void CheckEntryLevel()
          ResetEntryFlags();
          return;
       }
-      
+
       // Validate trend alignment using centralized function
       if(!CheckTrendConditions(g_ActiveBoxIndex, true))
       {
@@ -1604,11 +1672,15 @@ void CheckEntryLevel()
          if(distancePoints <= InpSnRPullbackPoints)
          {
             allowTrade = true;
+
+            if(InpUseBOSValidation && !waitingForPullback)
+               CheckForBOS(g_ActiveBoxIndex);
+            
             // Increment counts
-            if(IsBreakout)
-               g_Boxes[g_ActiveBoxIndex].break_count++;
-            if(IsHold)
-               g_Boxes[g_ActiveBoxIndex].hold_count++;
+            // if(IsBreakout)
+            //    g_Boxes[g_ActiveBoxIndex].break_count++;
+            // if(IsHold)
+            //    g_Boxes[g_ActiveBoxIndex].hold_count++;
          }
          
          // IsReHeld = false;
@@ -1625,10 +1697,14 @@ void CheckEntryLevel()
             if(prevClose > prevOpen) // Bullish confirmation
             {
                allowTrade = true;
-               if(IsBreakout)
-                  g_Boxes[g_ActiveBoxIndex].break_count++;
-               if(IsHold)
-                  g_Boxes[g_ActiveBoxIndex].hold_count++;
+
+               if(InpUseBOSValidation && !waitingForPullback)
+                  CheckForBOS(g_ActiveBoxIndex);
+            
+               // if(IsBreakout)
+               //    g_Boxes[g_ActiveBoxIndex].break_count++;
+               // if(IsHold)
+               //    g_Boxes[g_ActiveBoxIndex].hold_count++;
             }
             else
                Print("BUY re-test blocked - No bullish confirmation candle (Box "+IntegerToString(g_ActiveBoxIndex+1)+")");
@@ -1639,40 +1715,42 @@ void CheckEntryLevel()
       
       if(!allowTrade)
       {
-         if(IsBreakout)
-               Print("BUY blocked - Breakout pullback confirmation failed (Distance: ", DoubleToString(distancePoints, 0), " points, Break count: ", g_Boxes[g_ActiveBoxIndex].break_count, " , Box: ", IntegerToString(g_ActiveBoxIndex+1), ")");
-         else if(IsHold)
-            Print("BUY blocked - Hold pullback confirmation failed (Distance: ", DoubleToString(distancePoints, 0), " points, Hold count: ", g_Boxes[g_ActiveBoxIndex].hold_count, " , Box: ", IntegerToString(g_ActiveBoxIndex+1), ")");
+         // if(IsBreakout)
+         //       Print("BUY blocked - Breakout pullback confirmation failed (Distance: ", DoubleToString(distancePoints, 0), " points, Break count: ", g_Boxes[g_ActiveBoxIndex].break_count, " , Box: ", IntegerToString(g_ActiveBoxIndex+1), ")");
+         // else if(IsHold)
+         //    Print("BUY blocked - Hold pullback confirmation failed (Distance: ", DoubleToString(distancePoints, 0), " points, Hold count: ", g_Boxes[g_ActiveBoxIndex].hold_count, " , Box: ", IntegerToString(g_ActiveBoxIndex+1), ")");
+         
+         
          ResetEntryFlags();
          return;
       }
       
-      // All validations passed - execute trade
-      Logging("✓ All BUY conditions validated - Executing S&R trade");
-      Logging("   Hold Count: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].hold_count) + 
-              " | Box Hold Limit: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].box_hold_limit));
-      Logging("   Breakout Count: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].break_count) + 
-              " | Box Breakout Limit: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].box_break_limit));
-      Logging("   Limit BUY entry on Hold: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].buyOnHold_limit) + 
-              " | Limit BUY entry on Breakout: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].buyOnBreakout_limit));
-      Logging("   Is Re-Held: " + (g_Boxes[g_ActiveBoxIndex].is_reheld ? "true" : "false"));
-      Logging("   Box Index: " + IntegerToString(g_ActiveBoxIndex+1));
-      Logging("   Price Level: " + DoubleToString(g_Boxes[g_ActiveBoxIndex].top, _Digits));
-      Logging("   Distance: " + DoubleToString(distancePoints, 1) + " points | Previously Traded: " + (g_Boxes[g_ActiveBoxIndex].traded ? "Yes" : "No"));
-      Logging("   Is Hold: " + (IsHold ? "true" : "false") + 
-              " | Is Breakout: " + (IsBreakout ? "true" : "false"));
-      Logging("   Weekly Trend: " + TrendToString(W_Trend) + 
-              " | Daily Trend: " + TrendToString(D_Trend));
-      Logging(" | Daily Strategy: " + TradingStrategyToString(D_Strategy));
-      if(ExecuteBuyTrade(0, InpSnRMagicNumber))
-      {
-         g_Boxes[g_ActiveBoxIndex].traded = true;
-         g_Boxes[g_ActiveBoxIndex].traded_count++;
-         if(IsBreakout)
-            g_Boxes[g_ActiveBoxIndex].buyOnBreakout_count++;
-         if(IsHold)
-            g_Boxes[g_ActiveBoxIndex].buyOnHold_count++;
-      }
+      // // All validations passed - execute trade
+      // Logging("✓ All BUY conditions validated - Executing S&R trade");
+      // Logging("   Hold Count: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].hold_count) + 
+      //         " | Box Hold Limit: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].box_hold_limit));
+      // Logging("   Breakout Count: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].break_count) + 
+      //         " | Box Breakout Limit: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].box_break_limit));
+      // Logging("   Limit BUY entry on Hold: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].buyOnHold_limit) + 
+      //         " | Limit BUY entry on Breakout: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].buyOnBreakout_limit));
+      // Logging("   Is Re-Held: " + (g_Boxes[g_ActiveBoxIndex].is_reheld ? "true" : "false"));
+      // Logging("   Box Index: " + IntegerToString(g_ActiveBoxIndex+1));
+      // Logging("   Price Level: " + DoubleToString(g_Boxes[g_ActiveBoxIndex].top, _Digits));
+      // Logging("   Distance: " + DoubleToString(distancePoints, 1) + " points | Previously Traded: " + (g_Boxes[g_ActiveBoxIndex].traded ? "Yes" : "No"));
+      // Logging("   Is Hold: " + (IsHold ? "true" : "false") + 
+      //         " | Is Breakout: " + (IsBreakout ? "true" : "false"));
+      // Logging("   Weekly Trend: " + TrendToString(W_Trend) + 
+      //         " | Daily Trend: " + TrendToString(D_Trend));
+      // Logging(" | Daily Strategy: " + TradingStrategyToString(D_Strategy));
+      // if(ExecuteBuyTrade(0, InpSnRMagicNumber))
+      // {
+      //    g_Boxes[g_ActiveBoxIndex].traded = true;
+      //    g_Boxes[g_ActiveBoxIndex].traded_count++;
+      //    if(IsBreakout)
+      //       g_Boxes[g_ActiveBoxIndex].buyOnBreakout_count++;
+      //    if(IsHold)
+      //       g_Boxes[g_ActiveBoxIndex].buyOnHold_count++;
+      // }
       ResetEntryFlags();
    }
    // Validate SELL conditions
@@ -1718,7 +1796,7 @@ void CheckEntryLevel()
          ResetEntryFlags();
          return;
       }
-      
+           
       // Validate trend alignment using centralized function
       if(!CheckTrendConditions(g_ActiveBoxIndex, false))
       {
@@ -1743,11 +1821,15 @@ void CheckEntryLevel()
          if(distancePoints <= InpSnRPullbackPoints)
          {
             allowTrade = true;
+
+            if(InpUseBOSValidation && !waitingForPullback)
+               CheckForBOS(g_ActiveBoxIndex);
+            
             // Increment counts
-            if(IsBreakout)
-               g_Boxes[g_ActiveBoxIndex].break_count++;
-            if(IsHold)
-               g_Boxes[g_ActiveBoxIndex].hold_count++;
+            // if(IsBreakout)
+            //    g_Boxes[g_ActiveBoxIndex].break_count++;
+            // if(IsHold)
+            //    g_Boxes[g_ActiveBoxIndex].hold_count++;
          }
          
          // IsReHeld = false;
@@ -1764,10 +1846,14 @@ void CheckEntryLevel()
             if(prevClose < prevOpen) // Bearish confirmation
             {
                allowTrade = true;
-               if(IsBreakout)
-                  g_Boxes[g_ActiveBoxIndex].break_count++;
-               if(IsHold)
-                  g_Boxes[g_ActiveBoxIndex].hold_count++;
+
+               if(InpUseBOSValidation && !waitingForPullback)
+                  CheckForBOS(g_ActiveBoxIndex);
+            
+               // if(IsBreakout)
+               //    g_Boxes[g_ActiveBoxIndex].break_count++;
+               // if(IsHold)
+               //    g_Boxes[g_ActiveBoxIndex].hold_count++;
             }
             else
                Print("SELL re-test blocked - No bearish confirmation candle (Box "+IntegerToString(g_ActiveBoxIndex+1)+")");
@@ -1778,45 +1864,52 @@ void CheckEntryLevel()
       
       if(!allowTrade)
       {
-         if(IsBreakout)
-            Print("SELL blocked - Breakout pullback confirmation failed (Distance: ", DoubleToString(distancePoints, 0), " points, Break count: ", g_Boxes[g_ActiveBoxIndex].break_count, " , Box: ", IntegerToString(g_ActiveBoxIndex+1), ")");
-         else if(IsHold)
-            Print("SELL blocked - Hold pullback confirmation failed (Distance: ", DoubleToString(distancePoints, 0), " points, Hold count: ", g_Boxes[g_ActiveBoxIndex].hold_count, " , Box: ", IntegerToString(g_ActiveBoxIndex+1), ")");
+         // if(IsBreakout)
+         //    Print("SELL blocked - Breakout pullback confirmation failed (Distance: ", DoubleToString(distancePoints, 0), " points, Break count: ", g_Boxes[g_ActiveBoxIndex].break_count, " , Box: ", IntegerToString(g_ActiveBoxIndex+1), ")");
+         // else if(IsHold)
+         //    Print("SELL blocked - Hold pullback confirmation failed (Distance: ", DoubleToString(distancePoints, 0), " points, Hold count: ", g_Boxes[g_ActiveBoxIndex].hold_count, " , Box: ", IntegerToString(g_ActiveBoxIndex+1), ")");
          ResetEntryFlags();
          return;
       }
       
-      // All validations passed - execute trade
-      Logging("✓ All SELL conditions validated - Executing S&R trade");
-      Logging("   Hold Count: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].hold_count) + 
-              " | Box Hold Limit: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].box_hold_limit));
-      Logging("   Breakout Count: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].break_count) + 
-              " | Box Breakout Limit: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].box_break_limit));
-      Logging("   Limit SELL entry on Hold: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].sellOnHold_limit) + 
-              " | Limit SELL entry on Breakout: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].sellOnBreakout_limit));
-      Logging("   Is Re-Held: " + (g_Boxes[g_ActiveBoxIndex].is_reheld ? "true" : "false"));
-      Logging("   Box Index: " + IntegerToString(g_ActiveBoxIndex+1));
-      Logging("   Price Level: " + DoubleToString(g_Boxes[g_ActiveBoxIndex].bottom, _Digits));
-      Logging("   Distance: " + DoubleToString(distancePoints, 1) + " points | Previously Traded: " + (g_Boxes[g_ActiveBoxIndex].traded ? "Yes" : "No"));
-      Logging("   Is Hold: " + (IsHold ? "true" : "false") + 
-              " | Is Breakout: " + (IsBreakout ? "true" : "false"));
-      Logging("   Weekly Trend: " + TrendToString(W_Trend) + 
-              " | Daily Trend: " + TrendToString(D_Trend));
-      Logging(" | Daily Strategy: " + TradingStrategyToString(D_Strategy));
-      if(ExecuteSellTrade(0, InpSnRMagicNumber))
-      {
-         g_Boxes[g_ActiveBoxIndex].traded = true;
-         g_Boxes[g_ActiveBoxIndex].traded_count++;
-         if(IsBreakout)
-            g_Boxes[g_ActiveBoxIndex].sellOnBreakout_count++;
-         if(IsHold)
-            g_Boxes[g_ActiveBoxIndex].sellOnHold_count++;
-      }
+      // // All validations passed - execute trade
+      // Logging("✓ All SELL conditions validated - Executing S&R trade");
+      // Logging("   Hold Count: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].hold_count) + 
+      //         " | Box Hold Limit: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].box_hold_limit));
+      // Logging("   Breakout Count: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].break_count) + 
+      //         " | Box Breakout Limit: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].box_break_limit));
+      // Logging("   Limit SELL entry on Hold: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].sellOnHold_limit) + 
+      //         " | Limit SELL entry on Breakout: " + IntegerToString(g_Boxes[g_ActiveBoxIndex].sellOnBreakout_limit));
+      // Logging("   Is Re-Held: " + (g_Boxes[g_ActiveBoxIndex].is_reheld ? "true" : "false"));
+      // Logging("   Box Index: " + IntegerToString(g_ActiveBoxIndex+1));
+      // Logging("   Price Level: " + DoubleToString(g_Boxes[g_ActiveBoxIndex].bottom, _Digits));
+      // Logging("   Distance: " + DoubleToString(distancePoints, 1) + " points | Previously Traded: " + (g_Boxes[g_ActiveBoxIndex].traded ? "Yes" : "No"));
+      // Logging("   Is Hold: " + (IsHold ? "true" : "false") + 
+      //         " | Is Breakout: " + (IsBreakout ? "true" : "false"));
+      // Logging("   Weekly Trend: " + TrendToString(W_Trend) + 
+      //         " | Daily Trend: " + TrendToString(D_Trend));
+      // Logging(" | Daily Strategy: " + TradingStrategyToString(D_Strategy));
+      // if(ExecuteSellTrade(0, InpSnRMagicNumber))
+      // {
+      //    g_Boxes[g_ActiveBoxIndex].traded = true;
+      //    g_Boxes[g_ActiveBoxIndex].traded_count++;
+      //    if(IsBreakout)
+      //       g_Boxes[g_ActiveBoxIndex].sellOnBreakout_count++;
+      //    if(IsHold)
+      //       g_Boxes[g_ActiveBoxIndex].sellOnHold_count++;
+      // }
       ResetEntryFlags();
    }
    else
    {
       // No valid signal or signals disabled
+      ResetEntryFlags();
+   }
+   
+   // Defensive: ensure active box is always cleared after processing
+   if(g_ActiveBoxIndex == processingBoxIndex)
+   {
+      Print("WARNING: g_ActiveBoxIndex not reset properly in CheckEntryLevel, forcing reset");
       ResetEntryFlags();
    }
 }
@@ -1859,8 +1952,8 @@ bool ExecuteBuyTrade(double price = 0, int magicNumber = 0)
    else
    {
       // Use ATR-based SL
-      double atr = CalculateATR(200, 0, InpSwingTF);
-      sl = NormalizeDouble(ask - atr * 1.5, _Digits);
+      double atr = CalculateATR(200, 0, PERIOD_D1);
+      sl = NormalizeDouble(ask - atr * 3, _Digits);
    }
    
    // Use input TP if specified, otherwise use automatic from swing points
@@ -1904,8 +1997,8 @@ bool ExecuteBuyTrade(double price = 0, int magicNumber = 0)
    if(trade.Buy(lotSize, _Symbol, ask, sl, tp, comment))
    {
       Print("BUY order opened - Entry: ", ask, " | SL: ", sl, " | TP: ", tp);
-      waitingForPullback = false;
-      BOS.isActive = false;
+      // waitingForPullback = false;
+      // BOS.isActive = false;
       return true;
    }
    else
@@ -1943,8 +2036,8 @@ bool ExecuteSellTrade(double price = 0, int magicNumber = 0)
    else
    {
       // Use ATR-based SL
-      double atr = CalculateATR(200, 0, InpSwingTF);
-      sl = NormalizeDouble(bid + atr * 1.5, _Digits);
+      double atr = CalculateATR(200, 0, PERIOD_D1);
+      sl = NormalizeDouble(bid + atr * 3, _Digits);
    }
    
    // Use input TP if specified, otherwise use automatic from swing points
@@ -1988,8 +2081,8 @@ bool ExecuteSellTrade(double price = 0, int magicNumber = 0)
    if(trade.Sell(lotSize, _Symbol, bid, sl, tp, comment))
    {
       Print("SELL order opened - Entry: ", bid, " | SL: ", sl, " | TP: ", tp);
-      waitingForPullback = false;
-      BOS.isActive = false;
+      // waitingForPullback = false;
+      // BOS.isActive = false;
       return true;
    }
    else
@@ -2142,7 +2235,11 @@ void ApplyTrailingStop(int magicNumber = 0)
 {
    // double pipSize = (_Digits == 5 || _Digits == 3) ? 10 * _Point : _Point;
    double trailDistance = InpTrailingStop * _Point;
+   trailDistance *= 0.5; // Decrease trailing distance by 50% to reduce whipsaws
    double trailStep = InpTrailingStep * _Point;
+   
+   int totalPositions = PositionsTotal();
+   int processedCount = 0;
    
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -2155,16 +2252,18 @@ void ApplyTrailingStop(int magicNumber = 0)
       
       long posMagic = PositionGetInteger(POSITION_MAGIC);
       
-      // If magic number specified, filter by it
-      // Otherwise check if position belongs to either BOS or S&R system
+      // If magic number specified, filter by exact match
+      // Otherwise apply to BOS trades (any magic >= InpBOSMagicNumber to catch all BOS instances)
       bool magicMatch = false;
       if(magicNumber != 0)
          magicMatch = (posMagic == magicNumber);
       else
-         magicMatch = (posMagic == InpBOSMagicNumber || posMagic == InpSnRMagicNumber);
-      
+         magicMatch = (posMagic >= InpBOSMagicNumber); // Match all BOS trades
+      // Logging("  Position #"+ IntegerToString(ticket)+ " | Magic: "+ IntegerToString(posMagic)+ " | Match: YES");
       if(!magicMatch)
          continue;
+      
+
 
       // if(posMagic==InpSnRMagicNumber)
       // {  
@@ -2184,131 +2283,83 @@ void ApplyTrailingStop(int magicNumber = 0)
 
       bool isProfitable = (posType == POSITION_TYPE_BUY) ? (currentPrice > posOpenPrice) : (currentPrice < posOpenPrice);
       
+      // Print("    Type: ", (posType == POSITION_TYPE_BUY ? "BUY" : "SELL"), " | Entry: ", posOpenPrice, " | Current: ", currentPrice, " | SL: ", posSL, " | Profitable: ", (isProfitable ? "YES" : "NO"));
+      
       double newSL = 0;
       bool needUpdate = false;
       
       if(posType == POSITION_TYPE_BUY)
       {
-         // Check if trailing has started (price reached swH_LastHigh)
-         bool trailingStarted = swH_LastHigh.isValid && currentPrice >= swH_LastHigh.price;
+         // Apply normal trailing stop
+         newSL = NormalizeDouble(currentPrice - trailDistance, _Digits);
+         newSL = NormalizeDouble(MathRound(newSL / tickSize) * tickSize, _Digits);
          
-         if(trailingStarted)
+         // Validate: new SL must be below current price and above entry
+         if(newSL >= currentPrice)
          {
-            // Apply normal trailing stop
-            newSL = NormalizeDouble(currentPrice - trailDistance, _Digits);
-            newSL = NormalizeDouble(MathRound(newSL / tickSize) * tickSize, _Digits);
-            
-            // Validate: new SL must be below current price and above entry
-            if(newSL >= currentPrice)
-            {
-               continue; // Skip invalid SL
-            }
-            
-            // Check if we should update (price moved enough and new SL is better)
-            if(posSL == 0 || (newSL > posSL && (newSL - posSL) >= trailStep))
-            {
-               needUpdate = true;
-            }
+            continue; // Skip invalid SL
          }
-         else
+         
+         // Check if we should update (price moved enough and new SL is better)
+         if(posSL == 0 || (newSL > posSL && (newSL - posSL) >= trailStep))
          {
-            // Trailing not started yet - update SL to swH_LastLow if it's better
-            if(swH_LastLow.isValid)
-            {
-               trailingStarted = isProfitable && (currentPrice - posOpenPrice) >= trailDistance;
-
-               if(trailingStarted)
-               {
-                  // Apply normal trailing stop
-                  newSL = NormalizeDouble(currentPrice - trailDistance, _Digits);
-                  newSL = NormalizeDouble(MathRound(newSL / tickSize) * tickSize, _Digits);               
-                  // Only update if new SL is better (higher) than current SL and moved enough
-                  if(posSL == 0 || (newSL > posSL && (newSL - posSL) >= trailStep))
-                  {
-                     needUpdate = true;
-                  }
-               }
-               else
-               {
-                  newSL = NormalizeDouble(swH_LastLow.price - 50 * _Point, _Digits);
-               }
-            }
+            needUpdate = true;
          }
       }
       else // POSITION_TYPE_SELL
       {
-         // Check if trailing has started (price reached swH_LastLow)
-         bool trailingStarted = swH_LastLow.isValid && currentPrice <= swH_LastLow.price;
+         // Apply normal trailing stop
+         newSL = NormalizeDouble(currentPrice + trailDistance, _Digits);
+         newSL = NormalizeDouble(MathRound(newSL / tickSize) * tickSize, _Digits);
          
-         if(trailingStarted)
+         // Check if we should update (price moved enough and new SL is better)
+         if(posSL == 0 || (newSL < posSL && (posSL - newSL) >= trailStep))
          {
-            // Apply normal trailing stop
-            newSL = NormalizeDouble(currentPrice + trailDistance, _Digits);
-            newSL = NormalizeDouble(MathRound(newSL / tickSize) * tickSize, _Digits);
-            
-            // Check if we should update (price moved enough and new SL is better)
-            if(posSL == 0 || (newSL < posSL && (posSL - newSL) >= trailStep))
-            {
-               needUpdate = true;
-            }
-         }
-         else
-         {
-            // Trailing not started yet - update SL to swH_LastHigh if it's better
-            if(swH_LastHigh.isValid)
-            {
-               trailingStarted = isProfitable && (posOpenPrice - currentPrice) >= trailDistance;
-
-               if(trailingStarted)
-               {
-                  // Apply normal trailing stop
-                  newSL = NormalizeDouble(currentPrice + trailDistance, _Digits);
-                  newSL = NormalizeDouble(MathRound(newSL / tickSize) * tickSize, _Digits);               
-                  // Only update if new SL is better (lower) than current SL and moved enough
-                  if(posSL == 0 || (newSL < posSL && (posSL - newSL) >= trailStep))
-                  {
-                     needUpdate = true;
-                  }
-               }
-               else
-               {
-                  newSL = NormalizeDouble(swH_LastHigh.price + 50 * _Point, _Digits);
-               }
-            }
+            needUpdate = true;
          }
       }
       
+      // Print("    Need Update: ", (needUpdate ? "YES" : "NO"), " | New SL: ", newSL);
+      
       if(needUpdate)
       {
+         // Print("    → Attempting to modify SL to ", newSL);
          newSL = NormalizeDouble(newSL, _Digits);
          
-         // Get broker's minimum stop level
-         double minStopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
-         double currentPriceForCheck = (posType == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         // // Get broker's minimum stop level
+         // double minStopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+         // double currentPriceForCheck = (posType == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
          
-         // Validate minimum distance from current price
-         if((posType == POSITION_TYPE_BUY && (currentPriceForCheck - newSL) < minStopLevel) ||
-            (posType == POSITION_TYPE_SELL && (newSL - currentPriceForCheck) < minStopLevel))
-         {
-            Print("Warning: New SL too close to market. MinStopLevel: ", minStopLevel, " | Distance: ", 
-                  (posType == POSITION_TYPE_BUY ? currentPriceForCheck - newSL : newSL - currentPriceForCheck));
-            continue;
-         }
+         // // Validate minimum distance from current price
+         // if((posType == POSITION_TYPE_BUY && (currentPriceForCheck - newSL) < minStopLevel) ||
+         //    (posType == POSITION_TYPE_SELL && (newSL - currentPriceForCheck) < minStopLevel))
+         // {
+         //    Print("Warning: New SL too close to market. MinStopLevel: ", minStopLevel, " | Distance: ", 
+         //          (posType == POSITION_TYPE_BUY ? currentPriceForCheck - newSL : newSL - currentPriceForCheck));
+         //    continue;
+         // }
          
          if(trade.PositionModify(ticket, newSL, posTP))
          {
-            // Position modified successfully
+            // Logging("    ✓ SL modified successfully to "+ DoubleToString(newSL, _Digits)+" for position #"+IntegerToString(ticket));
          }
          else
          {
             int errorCode = GetLastError();
-            Print("Failed to modify position #", ticket, ". Error: ", errorCode,
-                  " | Current Price: ", currentPriceForCheck,
-                  " | Old SL: ", posSL,
-                  " | New SL: ", newSL,
-                  " | TP: ", posTP);
+            // Print("    ✗ Failed to modify SL. Error: ", errorCode, " | Old SL: ", posSL, " | New SL: ", newSL);
+            // Print("Failed to modify position #", ticket, ". Error: ", errorCode,
+            //       " | Current Price: ", currentPriceForCheck,
+            //       " | Old SL: ", posSL,
+            //       " | New SL: ", newSL,
+            //       " | TP: ", posTP);
          }
       }
+   }
+   
+   // Log END message only if positions were processed
+   if(processedCount > 0)
+   {
+      // Print("=== ApplyTrailingStop END === Processed: ", processedCount, " positions");
    }
 }
 

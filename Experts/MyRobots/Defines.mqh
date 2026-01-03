@@ -47,6 +47,7 @@ struct BoxData
    bool     is_support;
    bool     is_broken;
    bool     is_reheld;
+   bool     is_disabled;    // Box disabled after re-held (no new trades allowed)
    bool     traded;
    bool     drawn;
    int      traded_count;
@@ -68,11 +69,14 @@ struct BoxData
 //+------------------------------------------------------------------+
 struct BOSLevel
 {
+   string   name;
    double   price;
    datetime time;
    bool     isBullish;
    bool     isActive;
    int      barIndex;
+   int      boxIndex;
+   int      magicNumber;
 };
 
 //+------------------------------------------------------------------+
@@ -357,6 +361,7 @@ input int               InpPivotRightBars = 5;              // Pivot detection r
 
 input group "=== Trading Strategy ==="
 input TRADE_DIRECTION   InpTradeDirection = TRADE_BOTH;     // Allowed trade direction
+input bool              InpUseBOSValidation = true;          // Use BOS validation for entries
 input bool              InpEnableScalping = false;          // Enable Scalping Mode
 input bool              InpEnableSupertrend = true;         // Enable trade by Swing trend
 input int               InpBOSPullbackPoints = 50;          // Min pullback points to BOS level
@@ -385,7 +390,7 @@ input int               InpMaxSellOnHold = 1;               // Max simultaneous 
 input int               InpMaxBuyOnBreakout = 1;            // Max simultaneous BUY trades on Breakout signals
 input int               InpMaxSellOnBreakout = 1;           // Max simultaneous SELL trades on Breakout signals
 input bool              InpBlockOppositeEntry = true;       // Block entry if opposite positions exist
-input bool              InpCloseOnNewSwing = true;          // Close positions when new HTF swing detected
+input bool              InpCloseOnFalseSignal = true;       // Close positions when signal reverses
 input bool              InpUseTrailingStop = false;         // Enable trailing stop
 input int               InpTrailingStop = 50;               // Trailing stop distance in pips
 input int               InpTrailingStep = 10;               // Minimum price movement to trail (pips)
@@ -486,7 +491,7 @@ bool              g_SupIsResistance = false;
 bool              IsBreakout = false;
 bool              IsHold = false;
 bool              TrendAligned = false;
-int               g_ActiveBoxIndex = -1;  // Track which box triggered the signal
+static int        g_ActiveBoxIndex = -1;  // Track which box triggered the signal
 int               breakLimit = 2;
 int               holdLimit = 2;
 
@@ -504,6 +509,7 @@ int               g_Digits = 0;
 // BOS Detection
 BOSLevel          BOS;
 bool              waitingForPullback = false;
+bool              CheckBOS = false;
 bool              lastSwingWasHigh = false;
 
 // Account tracking
@@ -584,6 +590,7 @@ string TFtoString(ENUM_TIMEFRAMES tf)
       case PERIOD_M15: return "M15";
       case PERIOD_M30: return "M30";
       case PERIOD_H1: return "H1";
+      case PERIOD_H2: return "H2";
       case PERIOD_H4: return "H4";
       case PERIOD_H8: return "H8";
       case PERIOD_H12: return "H12";

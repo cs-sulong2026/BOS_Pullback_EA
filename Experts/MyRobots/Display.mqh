@@ -9,6 +9,7 @@
 
 #include "Defines.mqh"
 #include "Functions.mqh"
+// #include "Functions_SnR_BOS.mqh"
 
 // //+------------------------------------------------------------------+
 // //| Convert color to ARGB with transparency                          |
@@ -31,6 +32,10 @@ void DisplayMarketAnalysis(ENUM_TIMEFRAMES timeframe, TREND_TYPE trend, MARKET_C
                           TRADING_STRATEGY strategy, TRADING_STRATEGY secondaryStrategy, int yOffset = 0)
 {
    string tfString = TFtoString(timeframe);
+   
+   if(timeframe==InpSnRTF)
+      tfString = "S/R " + tfString;
+
    string prefix = "Analysis_" + tfString + "_";
    
    // Starting position
@@ -147,7 +152,7 @@ void DisplayAllTimeframesAnalysis()
    // Display Daily Analysis
    if(D_LastHigh.isValid || D_LastLow.isValid)
    {
-      DisplayMarketAnalysis(PERIOD_D1, D_Trend, D_MarketCondition, D_Strategy, D_SecondaryStrategy, offset);
+      DisplayMarketAnalysis(InpTrendTF, D_Trend, D_MarketCondition, D_Strategy, D_SecondaryStrategy, offset);
       offset += 100;
    }
    
@@ -166,56 +171,35 @@ void DisplayAllTimeframesAnalysis()
    }
 }
 
-//+------------------------------------------------------------------+
-//| Draw BOS Level on Chart                                          |
-//+------------------------------------------------------------------+
-void DrawBOSLevel(double price, datetime time, bool isBullish=true)
-{
-   string str = isBullish ? "BULLISH" : "BEARISH";
-   string objName = str+"\nBOS_Level";
-   //--- set time1 and time2 for trend line
-   datetime currentTime = TimeCurrent();
-   //--- set time1 to previous 5 bars from BOS detection
-   datetime time1 = time - 5 * PeriodSeconds(PERIOD_CURRENT);
-   //--- set time2 to 5 bars ahead of current time
-   datetime time2 = currentTime + 10 * PeriodSeconds(PERIOD_CURRENT);
+// //+------------------------------------------------------------------+
+// //| Draw BOS Level on Chart                                          |
+// //+------------------------------------------------------------------+
+// void DrawBOSLevel(double price, datetime time, bool isBullish=true)
+// {
+//    string str = isBullish ? "BULLISH" : "BEARISH";
+//    string objName = str+"\nBOS_Level";
+//    //--- set time1 and time2 for trend line
+//    datetime currentTime = TimeCurrent();
+//    //--- set time1 to previous 5 bars from BOS detection
+//    datetime time1 = time - 5 * PeriodSeconds(PERIOD_CURRENT);
+//    //--- set time2 to 5 bars ahead of current time
+//    datetime time2 = currentTime + 10 * PeriodSeconds(PERIOD_CURRENT);
 
-   //--- Delete old object if exists to redraw at new level
-   if(ObjectFind(0, objName) >= 0) {
-      ObjectDelete(0, objName);
-   }
-   //--- Create trend line object
-   ObjectCreate(0, objName, OBJ_TREND, 0, time1, price, time2, price);
-   ObjectSetInteger(0, objName, OBJPROP_BACK, true);
-   if(isBullish)
-      ObjectSetInteger(0, objName, OBJPROP_COLOR, clrDodgerBlue);
-   else
-      ObjectSetInteger(0, objName, OBJPROP_COLOR, clrDarkOrange);
-   ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_DASH);
-   ObjectSetInteger(0, objName, OBJPROP_WIDTH, 3);
-   ObjectSetInteger(0, objName, OBJPROP_RAY_RIGHT, false); 
-}
-
-//+------------------------------------------------------------------+
-//| Extend BOS Level Line                                            |
-//+------------------------------------------------------------------+
-bool ExtendBOSLevel(datetime time, double price)
-{
-   string str = BOS.isBullish ? "BULLISH" : "BEARISH";
-   string objName = str+"\nBOS_Level";
-   datetime extend_time = time + 10 * PeriodSeconds(PERIOD_CURRENT);
-//--- reset the error value
-   ResetLastError();
-//--- move trend line's anchor point
-   if(!ObjectMove(0,objName,1,extend_time,price))
-     {
-      Print(__FUNCTION__,
-            ": failed to move the anchor point! Error code = ",GetLastError());
-      return(false);
-     }
-//--- successful execution
-   return true;
-}
+//    //--- Delete old object if exists to redraw at new level
+//    if(ObjectFind(0, objName) >= 0) {
+//       ObjectDelete(0, objName);
+//    }
+//    //--- Create trend line object
+//    ObjectCreate(0, objName, OBJ_TREND, 0, time1, price, time2, price);
+//    ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+//    if(isBullish)
+//       ObjectSetInteger(0, objName, OBJPROP_COLOR, clrDodgerBlue);
+//    else
+//       ObjectSetInteger(0, objName, OBJPROP_COLOR, clrDarkOrange);
+//    ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_DASH);
+//    ObjectSetInteger(0, objName, OBJPROP_WIDTH, 3);
+//    ObjectSetInteger(0, objName, OBJPROP_RAY_RIGHT, false); 
+// }
 
 
 //+------------------------------------------------------------------+
