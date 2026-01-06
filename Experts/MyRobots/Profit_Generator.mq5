@@ -51,16 +51,23 @@ int OnInit()
 
    InitPivotPoints();
 
-   // Initialize BOS
-   BOS.price = 0.0;
-   BOS.time = 0;
-   BOS.isBullish = false;
-   BOS.isActive = false;
-   BOS.barIndex = 0;
-
    // Initialize boxes array
    ArrayResize(g_Boxes, MAX_BOXES);
    g_BoxCount = 0;
+   
+   // Initialize BOS array (one per box)
+   ArrayResize(g_BOS, MAX_BOXES);
+   for(int i = 0; i < MAX_BOXES; i++)
+   {
+      g_BOS[i].price = 0.0;
+      g_BOS[i].time = 0;
+      g_BOS[i].isBullish = false;
+      g_BOS[i].isActive = false;
+      g_BOS[i].barIndex = 0;
+      g_BOS[i].boxIndex = i;
+      g_BOS[i].magicNumber = 0;
+      g_BOS[i].maxEntry = 0;
+   }
    
    g_PointValue = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    g_Digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
@@ -164,6 +171,7 @@ void OnTick()
    // Print("🔍 Starting Support & Resistance analysis on timeframe: ", EnumToString(InpSnRTF), "...");
    AnalyzeLevels(InpSnRTF, InpLookbackPeriod);
    AnalyzeLowPivots();
+   MostRecentPoints();
    // AnalyzePivotPoints(InpLowTF, L_LastHigh, L_PrevHigh, L_LastLow, L_PrevLow);
    // AnalyzeLevels(PERIOD_H1, InpLookbackPeriod);
    
@@ -205,20 +213,17 @@ void OnTick()
    //    }
    // }
 
-   // Execute entry if signal flags are set
-   if(IsBreakout || IsHold)
-      CheckEntryLevel();
+   // Note: CheckEntryLevel is now called automatically for each visible box
+   // in UpdateBoxVisibility() - no need for manual checks here
    
-   if(InpUseBOSValidation && !waitingForPullback)
+   // Check for pullback entry for each box with active BOS
+   for(int i = 0; i < g_BoxCount; i++)
    {
-      // Print("Box Index: ", IntegerToString(g_ActiveBoxIndex));
-   }
-   
-   // Check for pullback entry
-   if(waitingForPullback && BOS.isActive)
-   {
-      ExtendBOSLevel(currentBarTime, BOS.price);
-      CheckForEntry();
+      if(g_BOS[i].isActive && g_Boxes[i].waitingForPullback)
+      {
+         ExtendBOSLevel(i, currentBarTime, g_BOS[i].price);
+         CheckForEntry(i);
+      }
    }
    
    // Apply trailing stop on every tick if enabled

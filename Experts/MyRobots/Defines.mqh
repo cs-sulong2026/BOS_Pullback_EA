@@ -24,6 +24,7 @@
 //+------------------------------------------------------------------+
 struct PivotPoint
 {
+   string   name;
    double   price;
    datetime time;
    int      barIndex;
@@ -48,6 +49,8 @@ struct BoxData
    bool     is_broken;
    bool     is_reheld;
    bool     is_disabled;    // Box disabled after re-held (no new trades allowed)
+   bool     is_strong;      // Strong box (HH/LL inside box)
+   bool     waitingForPullback;
    bool     traded;
    bool     drawn;
    int      traded_count;
@@ -77,7 +80,11 @@ struct BOSLevel
    int      barIndex;
    int      boxIndex;
    int      magicNumber;
+   int      maxEntry;
 };
+
+// BOS array - one entry per box (indexed by box index)
+BOSLevel g_BOS[];
 
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
@@ -159,64 +166,80 @@ TREND_TYPE DetermineTrend(ENUM_TIMEFRAMES timeframe, PivotPoint &lastHigh, Pivot
    if(hasFullData)
    {
       double close = iClose(_Symbol, timeframe, 0);
-      // Higher Highs and Higher Lows = Bullish Trend
-      bool higherHigh = lastHigh.price > prevHigh.price;
-      bool higherLow = lastLow.price > prevLow.price;
       
-      // Lower Highs and Lower Lows = Bearish Trend
-      bool lowerHigh = lastHigh.price < prevHigh.price;
-      bool lowerLow = lastLow.price < prevLow.price;
+      // Determine actual trend from price structure
+      // Now assignments are consistent: lastHigh/lastLow are most recent, prevHigh/prevLow are older
+      bool isHH = lastHigh.price > prevHigh.price;  // Recent high > Older high = HH
+      bool isLH = lastHigh.price < prevHigh.price;  // Recent high < Older high = LH
+      bool isHL = lastLow.price > prevLow.price;    // Recent low > Older low = HL
+      bool isLL = lastLow.price < prevLow.price;    // Recent low < Older low = LL
       
-      // Strong bullish trend
-      if(higherHigh && higherLow)
+      // BULLISH TREND: HH + HL (higher highs and higher lows)
+      if(isHH && isHL)
          return TREND_BULLISH;
       
-      // Strong bearish trend
-      if(lowerHigh && lowerLow)
+      // BEARISH TREND: LH + LL (lower highs and lower lows)
+      if(isLH && isLL)
          return TREND_BEARISH;
       
-      // Sideways/ranging market (lower high + higher low)
-      if(lowerHigh && higherLow)
+      // SIDEWAYS/RANGING: LH + HL (contracting range)
+      if(isLH && isHL)
       {
-         if(close > prevHigh.price)
-            return TREND_BULLISH;
-         else if(close < prevLow.price)
-            return TREND_BEARISH;
+         // Check current price position to determine bias
+         double midpoint = (lastHigh.price + lastLow.price) / 2.0;
+         if(close > midpoint)
+            return TREND_BULLISH;  // Bias to upside
+         else if(close < midpoint)
+            return TREND_BEARISH;  // Bias to downside
          else
             return TREND_SIDEWAYS;
       }
       
-      // Conflicting signals (higher high + lower low) - check current price position
-      if(higherHigh && lowerLow)
+      // CONFLICTING: HH + LL (expanding range - could be reversal or volatile)
+      if(isHH && isLL)
       {
-         if(close > lastHigh.price)
-            return TREND_BULLISH;
-         else if(close < lastLow.price)
-            return TREND_BEARISH;
+         // Check which pivot is more recent to determine direction
+         if(lastHigh.time > lastLow.time)
+         {
+            // High is more recent - bullish bias if price above it
+            if(close > lastHigh.price * 0.999)  // Within 0.1%
+               return TREND_BULLISH;
+         }
          else
-            return TREND_SIDEWAYS;
+         {
+            // Low is more recent - bearish bias if price below it
+            if(close < lastLow.price * 1.001)  // Within 0.1%
+               return TREND_BEARISH;
+         }
+         return TREND_SIDEWAYS;  // Can't determine clear direction
       }
-
-      // No clear pattern - undecided
-      return TREND_UNDECIDED;
+      
+      // If equal values (unlikely but handle defensively)
+      return TREND_SIDEWAYS;
    }
    else
    {
-      // Fallback: compare last high and last low positions
-      // If last high is more recent and higher, likely bullish
-      // If last low is more recent and lower, likely bearish
+      // Fallback: only have lastHigh and lastLow (no previous pivots)
+      // Use simple comparison and current price position
+      
+      double currentPrice = iClose(_Symbol, timeframe, 0);
+      double priceRange = lastHigh.price - lastLow.price;
       
       if(lastHigh.time > lastLow.time)
       {
          // Last high is more recent
-         if(lastHigh.price > lastLow.price * 1.01) // 1% threshold
+         if(currentPrice > lastHigh.price - priceRange * 0.3)  // In upper 30% of range
             return TREND_BULLISH;
+         else if(currentPrice < lastLow.price + priceRange * 0.3)  // In lower 30% of range
+            return TREND_BEARISH;
       }
       else
       {
          // Last low is more recent
-         if(lastLow.price < lastHigh.price * 0.99) // 1% threshold
+         if(currentPrice < lastLow.price + priceRange * 0.3)  // In lower 30% of range
             return TREND_BEARISH;
+         else if(currentPrice > lastHigh.price - priceRange * 0.3)  // In upper 30% of range
+            return TREND_BULLISH;
       }
       
       return TREND_SIDEWAYS;
@@ -399,6 +422,7 @@ input group "═══════ Display Settings ═══════"
 // input bool              InpShowPreviousBoxes = true;        // Show Previous Boxes
 input bool              InpShowOnlyClosest = false;          // Show Only Closest S/R Level (Hold/Breakout)
 input int               InpMaxVisibleBoxes = 5;              // Maximum Visible Boxes (0=All)
+input int               InpBoxDebug = 0;                    // Box Debugging (set to box number or -1 for all)   
 
 input group "═══════ Order Management ═══════"
 input int               InpBOSMagicNumber = 435067;         // BOS Magic Number
@@ -478,7 +502,7 @@ PivotPoint        PrevLow;
 //--- For Support/Resistance Boxes
 BoxData           g_Boxes[];
 int               g_BoxCount = 0;
-const int         MAX_BOXES = 50;
+const int         MAX_BOXES = 100;
 
 double            g_SupportLevel = 0;
 double            g_SupportLevel1 = 0;
@@ -488,10 +512,7 @@ double            g_ResistanceLevel1 = 0;
 // Support/Resistance status
 bool              g_ResIsSupport = false;
 bool              g_SupIsResistance = false;
-bool              IsBreakout = false;
-bool              IsHold = false;
 bool              TrendAligned = false;
-static int        g_ActiveBoxIndex = -1;  // Track which box triggered the signal
 int               breakLimit = 2;
 int               holdLimit = 2;
 
@@ -508,9 +529,11 @@ int               g_Digits = 0;
 
 // BOS Detection
 BOSLevel          BOS;
-bool              waitingForPullback = false;
+// bool              waitingForPullback = false;
 bool              CheckBOS = false;
 bool              lastSwingWasHigh = false;
+bool              lastIsHigherHigh = false;
+bool              lastIsLowerLow = false;
 
 // Account tracking
 double            dailyStartBalance = 0.0;

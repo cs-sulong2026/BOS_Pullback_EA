@@ -1250,7 +1250,7 @@ void DrawBOSLevel(double price, datetime time, bool isBullish=true)
       ObjectSetInteger(0, objName, OBJPROP_COLOR, clrDarkOrange);
    ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_DASH);
    ObjectSetInteger(0, objName, OBJPROP_WIDTH, 3);
-   ObjectSetInteger(0, objName, OBJPROP_RAY_RIGHT, false); 
+   ObjectSetInteger(0, objName, OBJPROP_RAY_RIGHT, false);
 }
 
 //+------------------------------------------------------------------+
