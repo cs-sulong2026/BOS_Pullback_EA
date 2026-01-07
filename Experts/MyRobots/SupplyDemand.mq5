@@ -11,9 +11,19 @@
 
 // Include the Supply & Demand classes
 #include "SupplyDemand.mqh"
-#include <Trade\Trade.mqh>
+#include "FileNLogger.mqh"
+#include <Trade/Trade.mqh>
+#include <Trade/AccountInfo.mqh>
 
 //--- Input parameters
+input group "=== Account Information ==="
+input bool              InpEnableEvaluation = true;      // Enable Prop Firm Evaluation Mode
+input double            InpInitialBalance = 10000.0;     // Initial account balance for calculations
+input double            InpDailyLossBreachedPct = 1.0;   // Daily Loss Breached percentage
+input double            InpRiskConsistencyPct = 2.0;     // Risk Consistency Rule percentage per trade idea
+input double            InpDailyLossLimitPct = 5.0;      // Daily loss limit percentage
+input double            InpMaxLossLimitPct = 10.0;       // Maximum loss limit
+
 input group "=== Zone Detection Settings ==="
 input int               InpLookbackBars = 500;           // Lookback Period (bars)
 input long              InpVolumeThreshold = 1000;       // Volume Threshold (0=auto calculate)
@@ -58,10 +68,11 @@ input double            InpVolumeMultiplier = 1.5;       // Volume Multiplier (f
 input bool              InpUpdateOnNewBar = true;        // Update Zones on New Bar
 input int               InpUpdateIntervalSec = 300;      // Update Interval (seconds)
 input bool              InpDebugMode = false;            // Enable Debug Logging
-
+input bool              InpSilentLogging = false;           // Silent Logging (no console output)
 //--- Global objects
 CSupplyDemandManager *g_SDManager = NULL;
-CTrade g_Trade;
+CTrade            g_Trade;
+CAccountInfo      account;
 
 //--- Global indicators
 int g_ATRHandle = INVALID_HANDLE;
@@ -70,11 +81,31 @@ int g_ATRHandle = INVALID_HANDLE;
 datetime g_LastBarTime = 0;
 datetime g_LastUpdateTime = 0;
 
+//--- Evaluation tracking
+double g_DailyLossThreshold = 0;        // DLL threshold value (resets daily)
+double g_MaxLossThreshold = 0;          // MLL threshold value (permanent)
+int g_DLBCount = 0;                     // Daily Loss Breach counter
+int g_RCRCount = 0;                     // Risk Consistency Rule breach counter
+bool g_TradingDisabled = false;         // Trading disabled flag
+datetime g_LastResetTime = 0;           // Last daily reset time
+string g_DisplayLabel = "SD_Eval";      // Chart label name
+string g_FileName = "\\SnD_Data_"+IntegerToString(acc_login)+".dat";
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   // Initialize logging
+   log_file = INVALID_HANDLE;
+   acc_login = (int)account.Login();
+   expert_folder = "SnD_Logs";
+   work_folder = expert_folder+"\\"+CurrentAccountInfo(account.Server())+"_"+IntegerToString(acc_login);
+   log_fileName = "\\SnD_"+RemoveDots(TimeToString(DateToString(), TIME_DATE))+".log";
+   common_folder = false;
+   log_enabled = InpDebugMode;
+   silent_log = InpSilentLogging;
+
    // Create Supply & Demand Manager
    g_SDManager = new CSupplyDemandManager();
    if(g_SDManager == NULL)
@@ -155,6 +186,28 @@ int OnInit()
    g_LastBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
    g_LastUpdateTime = TimeCurrent();
    
+   // Initialize evaluation system
+   if(InpEnableEvaluation)
+   {
+      double dailyLoss = InpInitialBalance * InpDailyLossLimitPct / 100.0;
+      double maxLoss = InpInitialBalance * InpMaxLossLimitPct / 100.0;
+      
+      g_DailyLossThreshold = InpInitialBalance - dailyLoss;
+      g_MaxLossThreshold = InpInitialBalance - maxLoss;
+      g_DLBCount = 0;
+      g_RCRCount = 0;
+      g_TradingDisabled = false;
+      g_LastResetTime = TimeCurrent();
+      
+      Print("Evaluation Mode ENABLED:");
+      Print("  Initial Balance: $", InpInitialBalance);
+      Print("  Daily Loss Limit: $", dailyLoss, " (Threshold: $", g_DailyLossThreshold, ")");
+      Print("  Max Loss Limit: $", maxLoss, " (Threshold: $", g_MaxLossThreshold, ")");
+      Print("  DLB %: ", InpDailyLossBreachedPct, "% | RCR %: ", InpRiskConsistencyPct, "%");
+      
+      CreateEvaluationDisplay();
+   }
+   
    Print("Supply & Demand EA initialized successfully");
    Print("  Symbol: ", _Symbol);
    Print("  Timeframe: ", EnumToString(InpZoneTimeframe));
@@ -185,8 +238,18 @@ void OnDeinit(const int reason)
       g_ATRHandle = INVALID_HANDLE;
    }
    
-   if(InpDebugMode)
-      Print("Supply & Demand EA deinitialized. Reason: ", reason);
+   // Clean up evaluation display
+   if(InpEnableEvaluation)
+   {
+      for(int i = 0; i < 10; i++)
+      {
+         string labelName = g_DisplayLabel + "_" + IntegerToString(i);
+         ObjectDelete(0, labelName);
+      }
+   }
+   
+   // if(InpDebugMode)
+   //    Print("Supply & Demand EA deinitialized. Reason: ", reason);
 }
 
 //+------------------------------------------------------------------+
@@ -196,6 +259,14 @@ void OnTick()
 {
    if(g_SDManager == NULL)
       return;
+   
+   // Check daily reset (23:55 server time)
+   if(InpEnableEvaluation)
+   {
+      CheckDailyReset();
+      CheckEvaluationLimits();
+      UpdateEvaluationDisplay();
+   }
    
    // Check for new bar
    datetime currentBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
@@ -207,8 +278,8 @@ void OnTick()
       
       if(InpUpdateOnNewBar)
       {
-         if(InpDebugMode)
-            Print("New bar detected, updating zones...");
+         // if(InpDebugMode)
+         //    Print("New bar detected, updating zones...");
          
          // Detect new zones in recent bars
          g_SDManager.DetectNewZones(20);
@@ -220,7 +291,7 @@ void OnTick()
    }
    
    // Manage trailing stops and TPs
-   if(InpEnableTrading && (InpEnableTrailingStop || InpEnableTrailingTP))
+   if(InpEnableTrading && !g_TradingDisabled && (InpEnableTrailingStop || InpEnableTrailingTP))
    {
       ManageTrailing();
    }
@@ -235,12 +306,12 @@ void OnTick()
       g_SDManager.UpdateAllZones();
       g_SDManager.ManageZoneDisplay();
       
-      if(InpDebugMode && !isNewBar)
-      {
-         Print("Periodic update:");
-         Print("  Supply zones: ", g_SDManager.GetSupplyZoneCount());
-         Print("  Demand zones: ", g_SDManager.GetDemandZoneCount());
-      }
+      // if(InpDebugMode && !isNewBar)
+      // {
+      //    Print("Periodic update:");
+      //    Print("  Supply zones: ", g_SDManager.GetSupplyZoneCount());
+      //    Print("  Demand zones: ", g_SDManager.GetDemandZoneCount());
+      // }
    }
    
    // Get current price
@@ -251,32 +322,27 @@ void OnTick()
    CSupplyDemandZone *closestDemand = g_SDManager.GetClosestDemandZone(currentPrice);
    
    // Debug: Show closest zone info
-   static datetime lastDebugTime = 0;
-   if(InpDebugMode && currentTime - lastDebugTime >= 60) // Every minute
-   {
-      lastDebugTime = currentTime;
-      
-      if(closestSupply != NULL)
-      {
-         Print("Closest SUPPLY zone: ", closestSupply.GetBottom(), " - ", closestSupply.GetTop(),
-               " | Distance: ", DoubleToString(closestSupply.GetDistanceToPrice(), 1), 
-               " | Volume: ", closestSupply.GetVolume(),
-               " | State: ", EnumToString(closestSupply.GetState()));
-      }
-      
-      if(closestDemand != NULL)
-      {
-         Print("Closest DEMAND zone: ", closestDemand.GetBottom(), " - ", closestDemand.GetTop(),
-               " | Distance: ", DoubleToString(closestDemand.GetDistanceToPrice(), 1),
-               " | Volume: ", closestDemand.GetVolume(),
-               " | State: ", EnumToString(closestDemand.GetState()));
-      }
-   }
-   
-   //--- TODO: Add trading logic here
-   //--- Use closestSupply and closestDemand for entry decisions
-   //--- Check zone state (SD_STATE_ACTIVE, SD_STATE_UNTESTED, etc.)
-   //--- Implement entry conditions based on zone touches
+   // static datetime lastDebugTime = 0;
+   // if(InpDebugMode && currentTime - lastDebugTime >= 60) // Every minute
+   // {
+   //    lastDebugTime = currentTime;
+   //    
+   //    if(closestSupply != NULL)
+   //    {
+   //       Print("Closest SUPPLY zone: ", closestSupply.GetBottom(), " - ", closestSupply.GetTop(),
+   //             " | Distance: ", DoubleToString(closestSupply.GetDistanceToPrice(), 1), 
+   //             " | Volume: ", closestSupply.GetVolume(),
+   //             " | State: ", EnumToString(closestSupply.GetState()));
+   //    }
+   //    
+   //    if(closestDemand != NULL)
+   //    {
+   //       Print("Closest DEMAND zone: ", closestDemand.GetBottom(), " - ", closestDemand.GetTop(),
+   //             " | Distance: ", DoubleToString(closestDemand.GetDistanceToPrice(), 1),
+   //             " | Volume: ", closestDemand.GetVolume(),
+   //             " | State: ", EnumToString(closestDemand.GetState()));
+   //    }
+   // }
 }
 
 //+------------------------------------------------------------------+
@@ -508,15 +574,15 @@ void ManageTrailing()
          
          if(g_Trade.PositionModify(ticket, newSL, newTP))
          {
-            if(InpDebugMode)
-               Print("[Trailing] Ticket=", ticket, " Type=", EnumToString(posType), 
-                     " NewSL=", newSL, " NewTP=", newTP);
+            // if(InpDebugMode)
+            //    Print("[Trailing] Ticket=", ticket, " Type=", EnumToString(posType), 
+            //          " NewSL=", newSL, " NewTP=", newTP);
          }
          else
          {
-            if(InpDebugMode)
-               Print("[Trailing] ERROR: Failed to modify ticket=", ticket, 
-                     " - ", g_Trade.ResultRetcodeDescription());
+            // if(InpDebugMode)
+            //    Print("[Trailing] ERROR: Failed to modify ticket=", ticket, 
+            //          " - ", g_Trade.ResultRetcodeDescription());
          }
       }
    }
@@ -537,6 +603,34 @@ double GetATR()
       return 0;
    
    return atr[0];
+}
+
+//+------------------------------------------------------------------+
+//| Get position commission from deals                                |
+//+------------------------------------------------------------------+
+double GetPositionCommission(ulong positionTicket)
+{
+   double commission = 0;
+   
+   // Get position identifier
+   if(!PositionSelectByTicket(positionTicket))
+      return 0;
+   
+   ulong positionId = PositionGetInteger(POSITION_IDENTIFIER);
+   
+   // Search through deals history for this position
+   HistorySelectByPosition(positionId);
+   
+   for(int i = 0; i < HistoryDealsTotal(); i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket > 0)
+      {
+         commission += HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+      }
+   }
+   
+   return commission;
 }
 
 //+------------------------------------------------------------------+
@@ -575,14 +669,14 @@ bool HasPositionForZone(ENUM_SD_ZONE_TYPE zoneType)
 //+------------------------------------------------------------------+
 bool OpenBuyTrade(CSupplyDemandZone *zone)
 {
-   if(zone == NULL || !InpEnableTrading)
+   if(zone == NULL || !InpEnableTrading || g_TradingDisabled)
       return false;
    
    // Check if max trades reached
    if(HasPositionForZone(SD_ZONE_DEMAND))
    {
-      if(InpDebugMode)
-         Print("[OpenBuyTrade] Max trades (", InpMaxTrade, ") reached for DEMAND zones");
+      // if(InpDebugMode)
+      //    Print("[OpenBuyTrade] Max trades (", InpMaxTrade, ") reached for DEMAND zones");
       return false;
    }
    
@@ -597,6 +691,17 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    double sl = price - (atr * InpATRMultiplierSL);
    double tp = price + (atr * InpATRMultiplierTP);
    
+   // Check RCR before opening
+   if(InpEnableEvaluation)
+   {
+      double potentialRisk = MathAbs(price - sl) * InpLotSize * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      if(!CheckRiskConsistencyRule(_Symbol, POSITION_TYPE_BUY, potentialRisk))
+      {
+         Print("[EVAL] BUY trade blocked - Risk Consistency Rule would be breached");
+         return false;
+      }
+   }
+   
    // Normalize prices
    double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    sl = NormalizeDouble(MathFloor(sl / tickSize) * tickSize, _Digits);
@@ -604,8 +709,8 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    
    string comment = StringFormat("%s_BUY_D%.2f", InpTradeComment, zone.GetBottom());
    
-   if(InpDebugMode)
-      Print("[OpenBuyTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
+   // if(InpDebugMode)
+   //    Print("[OpenBuyTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
    
    if(g_Trade.Buy(InpLotSize, _Symbol, price, sl, tp, comment))
    {
@@ -625,14 +730,14 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
 //+------------------------------------------------------------------+
 bool OpenSellTrade(CSupplyDemandZone *zone)
 {
-   if(zone == NULL || !InpEnableTrading)
+   if(zone == NULL || !InpEnableTrading || g_TradingDisabled)
       return false;
    
    // Check if max trades reached
    if(HasPositionForZone(SD_ZONE_SUPPLY))
    {
-      if(InpDebugMode)
-         Print("[OpenSellTrade] Max trades (", InpMaxTrade, ") reached for SUPPLY zones");
+      // if(InpDebugMode)
+      //    Print("[OpenSellTrade] Max trades (", InpMaxTrade, ") reached for SUPPLY zones");
       return false;
    }
    
@@ -647,6 +752,17 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    double sl = price + (atr * InpATRMultiplierSL);
    double tp = price - (atr * InpATRMultiplierTP);
    
+   // Check RCR before opening
+   if(InpEnableEvaluation)
+   {
+      double potentialRisk = MathAbs(price - sl) * InpLotSize * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      if(!CheckRiskConsistencyRule(_Symbol, POSITION_TYPE_SELL, potentialRisk))
+      {
+         Print("[EVAL] SELL trade blocked - Risk Consistency Rule would be breached");
+         return false;
+      }
+   }
+   
    // Normalize prices
    double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    sl = NormalizeDouble(MathCeil(sl / tickSize) * tickSize, _Digits);
@@ -654,8 +770,8 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    
    string comment = StringFormat("%s_SELL_S%.2f", InpTradeComment, zone.GetTop());
    
-   if(InpDebugMode)
-      Print("[OpenSellTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
+   // if(InpDebugMode)
+   //    Print("[OpenSellTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
    
    if(g_Trade.Sell(InpLotSize, _Symbol, price, sl, tp, comment))
    {
@@ -667,5 +783,242 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    {
       Print("[OpenSellTrade] ERROR: Failed to open SELL - ", g_Trade.ResultRetcodeDescription());
       return false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check Daily Reset at 23:55 server time                          |
+//+------------------------------------------------------------------+
+void CheckDailyReset()
+{
+   MqlDateTime currentTime;
+   TimeToStruct(TimeCurrent(), currentTime);
+   
+   MqlDateTime lastResetTime;
+   TimeToStruct(g_LastResetTime, lastResetTime);
+   
+   // Check if it's 23:55 and we haven't reset today
+   if(currentTime.hour == 23 && currentTime.min == 55)
+   {
+      if(currentTime.day != lastResetTime.day || currentTime.mon != lastResetTime.mon)
+      {
+         double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+         double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+         double dailyLoss = InpInitialBalance * InpDailyLossLimitPct / 100.0;
+         
+         // Reset threshold based on Equity vs Balance
+         if(equity > balance)
+            g_DailyLossThreshold = equity - dailyLoss;
+         else
+            g_DailyLossThreshold = balance - dailyLoss;
+         
+         g_LastResetTime = TimeCurrent();
+         
+         Print("[EVAL] Daily Reset at 23:55 | New DLL Threshold: $", g_DailyLossThreshold, 
+               " | Equity: $", equity, " | Balance: $", balance);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check Evaluation Limits (DLB, RCR, DLL, MLL)                    |
+//+------------------------------------------------------------------+
+void CheckEvaluationLimits()
+{
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   
+   // Check Maximum Loss Limit (MLL) - Permanent disable
+   if(equity <= g_MaxLossThreshold)
+   {
+      if(!g_TradingDisabled)
+      {
+         g_TradingDisabled = true;
+         CloseAllPositions("MLL Breached");
+         Print("[EVAL] *** MAXIMUM LOSS LIMIT BREACHED *** Equity: $", equity, 
+               " <= MLL Threshold: $", g_MaxLossThreshold);
+         Print("[EVAL] TRADING PERMANENTLY DISABLED - Manual intervention required");
+         Alert("MLL BREACHED! Trading DISABLED. Equity: $", equity);
+      }
+      return;
+   }
+   
+   // Check Daily Loss Limit (DLL) - Daily disable
+   if(equity <= g_DailyLossThreshold)
+   {
+      if(!g_TradingDisabled)
+      {
+         g_TradingDisabled = true;
+         CloseAllPositions("DLL Breached");
+         Print("[EVAL] *** DAILY LOSS LIMIT BREACHED *** Equity: $", equity, 
+               " <= DLL Threshold: $", g_DailyLossThreshold);
+         Print("[EVAL] TRADING DISABLED until daily reset at 23:55");
+         Alert("DLL BREACHED! Trading DISABLED until 23:55. Equity: $", equity);
+      }
+      return;
+   }
+   else
+   {
+      // Re-enable trading if DLL is no longer breached after reset
+      if(g_TradingDisabled)
+      {
+         g_TradingDisabled = false;
+         Print("[EVAL] Trading re-enabled after daily reset. Equity: $", equity);
+      }
+   }
+   
+   // Check Daily Loss Breached (DLB) - Soft limit
+   double dlbThreshold = InpInitialBalance * (1.0 - InpDailyLossBreachedPct / 100.0);
+   if(equity < dlbThreshold)
+   {
+      g_DLBCount++;
+      CloseAllPositions("DLB Soft Breach");
+      Print("[EVAL] *** DLB BREACHED *** Count: ", g_DLBCount, " | Equity: $", equity, 
+            " < DLB Threshold: $", dlbThreshold, " (", InpDailyLossBreachedPct, "%)");
+      Print("[EVAL] All positions closed. Trading continues with increased breach count.");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check Risk Consistency Rule for trade idea                       |
+//+------------------------------------------------------------------+
+bool CheckRiskConsistencyRule(string symbol, ENUM_POSITION_TYPE direction, double newRisk)
+{
+   double totalRisk = newRisk; // Start with new trade risk
+   
+   // Calculate total risk for same symbol + direction (trade idea)
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      
+      if(PositionGetString(POSITION_SYMBOL) != symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(posType != direction) continue;
+      
+      // Calculate position risk (including floating loss)
+      double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double posSL = PositionGetDouble(POSITION_SL);
+      double posLots = PositionGetDouble(POSITION_VOLUME);
+      double posProfit = PositionGetDouble(POSITION_PROFIT);
+      double posSwap = PositionGetDouble(POSITION_SWAP);
+      double posCommission = GetPositionCommission(ticket);
+      
+      // Risk = max potential loss from SL
+      double riskDistance = MathAbs(posOpenPrice - posSL);
+      double posRisk = riskDistance * posLots * SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+      
+      // Add current floating loss if negative
+      double floatingPnL = posProfit + posSwap + posCommission;
+      if(floatingPnL < 0)
+         posRisk += MathAbs(floatingPnL);
+      
+      totalRisk += posRisk;
+   }
+   
+   // Check against RCR percentage
+   double rcrLimit = InpInitialBalance * InpRiskConsistencyPct / 100.0;
+   
+   if(totalRisk > rcrLimit)
+   {
+      g_RCRCount++;
+      Print("[EVAL] *** RCR WOULD BE BREACHED *** Count: ", g_RCRCount, 
+            " | Total Risk: $", totalRisk, " > RCR Limit: $", rcrLimit, " (", InpRiskConsistencyPct, "%)");
+      return false;
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Close all positions with reason                                  |
+//+------------------------------------------------------------------+
+void CloseAllPositions(string reason)
+{
+   int closed = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      
+      if(g_Trade.PositionClose(ticket))
+      {
+         closed++;
+         Print("[EVAL] Closed position #", ticket, " - Reason: ", reason);
+      }
+   }
+   
+   if(closed > 0)
+      Print("[EVAL] Total positions closed: ", closed, " - Reason: ", reason);
+}
+
+//+------------------------------------------------------------------+
+//| Create Evaluation Display on Chart                               |
+//+------------------------------------------------------------------+
+void CreateEvaluationDisplay()
+{
+   int yOffset = 50;
+   int lineHeight = 14;
+   
+   // Create 10 label lines
+   for(int i = 0; i < 10; i++)
+   {
+      string labelName = g_DisplayLabel + "_" + IntegerToString(i);
+      ObjectCreate(0, labelName, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, labelName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, labelName, OBJPROP_XDISTANCE, 10);
+      ObjectSetInteger(0, labelName, OBJPROP_YDISTANCE, yOffset + (i * lineHeight));
+      ObjectSetInteger(0, labelName, OBJPROP_COLOR, clrDarkGray);
+      ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 9);
+      ObjectSetString(0, labelName, OBJPROP_FONT, "Microsoft Sans Serif");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update Evaluation Display on Chart                               |
+//+------------------------------------------------------------------+
+void UpdateEvaluationDisplay()
+{
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   
+   double dailyLossAllowed = InpInitialBalance * InpDailyLossLimitPct / 100.0;
+   double maxLossAllowed = InpInitialBalance * InpMaxLossLimitPct / 100.0;
+   
+   double dailyRemaining = equity - g_DailyLossThreshold;
+   double maxRemaining = equity - g_MaxLossThreshold;
+   
+   string statusText = g_TradingDisabled ? "DISABLED" : "ACTIVE";
+   color statusColor = g_TradingDisabled ? clrRed : clrLime;
+   
+   // Line by line text
+   string lines[10];
+   lines[0] = "═══ EVALUATION STATUS ═══";
+   lines[1] = "Status: " + statusText;
+   lines[2] = StringFormat("Equity: $%.2f | Balance: $%.2f", equity, balance);
+   lines[3] = "─────────────────────────";
+   lines[4] = StringFormat("DLL: $%.2f / $%.2f (%.1f%%)", dailyRemaining, dailyLossAllowed, (dailyRemaining / dailyLossAllowed * 100.0));
+   lines[5] = StringFormat("MLL: $%.2f / $%.2f (%.1f%%)", maxRemaining, maxLossAllowed, (maxRemaining / maxLossAllowed * 100.0));
+   lines[6] = "─────────────────────────";
+   lines[7] = StringFormat("DLB Count: %d (%.1f%%)", g_DLBCount, InpDailyLossBreachedPct);
+   lines[8] = StringFormat("RCR Count: %d (%.1f%%)", g_RCRCount, InpRiskConsistencyPct);
+   lines[9] = "";
+   
+   // Update each label
+   for(int i = 0; i < 10; i++)
+   {
+      string labelName = g_DisplayLabel + "_" + IntegerToString(i);
+      ObjectSetString(0, labelName, OBJPROP_TEXT, lines[i]);
+      
+      // Color status line differently
+      if(i == 1)
+         ObjectSetInteger(0, labelName, OBJPROP_COLOR, statusColor);
+      else
+         ObjectSetInteger(0, labelName, OBJPROP_COLOR, clrDarkGray);
    }
 }
