@@ -11,6 +11,7 @@
 
 // Include the Supply & Demand classes
 #include "SupplyDemand.mqh"
+#include <Trade\Trade.mqh>
 
 //--- Input parameters
 input group "=== Zone Detection Settings ==="
@@ -20,6 +21,25 @@ input int               InpMinBarsInZone = 2;            // Minimum Bars in Zone
 input int               InpMaxBarsInZone = 10;           // Maximum Bars in Zone
 input double            InpMinZoneSize = 50.0;           // Minimum Zone Size (points)
 input double            InpMaxZoneSize = 1000.0;         // Maximum Zone Size (points)
+input double            InpMinPriceLeftDistance = 20.0;  // Min Distance to Consider Left (points)
+
+input group "=== Trading Settings ==="
+input bool              InpEnableTrading = true;         // Enable Auto Trading
+input double            InpLotSize = 0.01;               // Fixed Lot Size
+input int               InpMaxTrade = 3;                 // Maximum Concurrent Trades
+input int               InpATRPeriod = 14;               // ATR Period
+input double            InpATRMultiplierSL = 2.0;        // ATR Multiplier for SL
+input double            InpATRMultiplierTP = 3.0;        // ATR Multiplier for TP
+input int               InpMagicNumber = 123456;         // Magic Number
+input string            InpTradeComment = "SD_EA";       // Trade Comment
+
+input group "=== Trailing Settings ==="
+input bool              InpEnableTrailingStop = false;   // Enable Trailing Stop
+input double            InpTrailingStopDistance = 50.0;  // Trailing Stop Distance (points)
+input double            InpTrailingStopStep = 10.0;      // Trailing Stop Step (points)
+input bool              InpEnableTrailingTP = false;     // Enable Trailing TP
+input double            InpTrailingTPDistance = 50.0;    // Trailing TP Distance (points)
+input double            InpTrailingTPStep = 10.0;        // Trailing TP Step (points)
 
 input group "=== Zone Display Settings ==="
 input int               InpShowZone = -1;                // Show Zones (-1=all, 0=none, N=closest)
@@ -41,6 +61,10 @@ input bool              InpDebugMode = false;            // Enable Debug Logging
 
 //--- Global objects
 CSupplyDemandManager *g_SDManager = NULL;
+CTrade g_Trade;
+
+//--- Global indicators
+int g_ATRHandle = INVALID_HANDLE;
 
 //--- Tracking variables
 datetime g_LastBarTime = 0;
@@ -71,7 +95,7 @@ int OnInit()
    // Initialize manager
    if(!g_SDManager.Initialize(_Symbol, InpZoneTimeframe, InpLookbackBars, 
                               volumeThreshold, InpMinBarsInZone, InpMaxBarsInZone,
-                              InpMinZoneSize, InpMaxZoneSize))
+                              InpMinZoneSize, InpMaxZoneSize, InpMinPriceLeftDistance))
    {
       Print("ERROR: Failed to initialize Supply Demand Manager");
       delete g_SDManager;
@@ -84,6 +108,28 @@ int OnInit()
    g_SDManager.SetVisualSettings(InpSupplyColor, InpDemandColor, InpSupplyColorFill,
                                  InpDemandColorFill, InpZoneTransparency, 
                                  InpShowArrows, InpShowLabels);
+   
+   // Initialize trading
+   if(InpEnableTrading)
+   {
+      g_Trade.SetExpertMagicNumber(InpMagicNumber);
+      g_Trade.SetDeviationInPoints(10);
+      g_Trade.SetTypeFilling(ORDER_FILLING_FOK);
+      g_Trade.SetAsyncMode(false);
+      
+      // Create ATR indicator
+      g_ATRHandle = iATR(_Symbol, InpZoneTimeframe, InpATRPeriod);
+      if(g_ATRHandle == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create ATR indicator");
+         delete g_SDManager;
+         g_SDManager = NULL;
+         return INIT_FAILED;
+      }
+      
+      if(InpDebugMode)
+         Print("Trading enabled with Magic Number: ", InpMagicNumber);
+   }
    
    // Perform initial zone detection
    if(InpDebugMode)
@@ -114,6 +160,7 @@ int OnInit()
    Print("  Timeframe: ", EnumToString(InpZoneTimeframe));
    Print("  Show zones: ", InpShowZone == -1 ? "All" : (InpShowZone == 0 ? "None" : IntegerToString(InpShowZone) + " closest"));
    Print("  Volume threshold: ", volumeThreshold);
+   Print("  Trading: ", InpEnableTrading ? "ENABLED" : "DISABLED");
    
    return INIT_SUCCEEDED;
 }
@@ -129,6 +176,13 @@ void OnDeinit(const int reason)
       g_SDManager.DeleteAllZones();
       delete g_SDManager;
       g_SDManager = NULL;
+   }
+   
+   // Release ATR indicator
+   if(g_ATRHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(g_ATRHandle);
+      g_ATRHandle = INVALID_HANDLE;
    }
    
    if(InpDebugMode)
@@ -156,9 +210,19 @@ void OnTick()
          if(InpDebugMode)
             Print("New bar detected, updating zones...");
          
-         // Re-detect zones on new bar
-         g_SDManager.DetectZones();
+         // Detect new zones in recent bars
+         g_SDManager.DetectNewZones(20);
+         
+         // Update existing zones (check for broken/touched zones)
+         g_SDManager.UpdateAllZones();
+         g_SDManager.ManageZoneDisplay();
       }
+   }
+   
+   // Manage trailing stops and TPs
+   if(InpEnableTrading && (InpEnableTrailingStop || InpEnableTrailingTP))
+   {
+      ManageTrailing();
    }
    
    // Time-based update
@@ -324,35 +388,284 @@ bool CheckDemandZoneEntry(CSupplyDemandZone *zone)
 }
 
 //+------------------------------------------------------------------+
-//| Open Buy Trade Template                                          |
+//| Manage Trailing Stop and Trailing TP                            |
 //+------------------------------------------------------------------+
-bool OpenBuyTrade(CSupplyDemandZone *zone)
+void ManageTrailing()
 {
-   if(zone == NULL)
-      return false;
-   
-   // TODO: Implement buy trade logic
-   // - Calculate lot size based on risk
-   // - Set stop loss at zone bottom
-   // - Set take profit based on reward:risk
-   // - Use CTrade object to place order
-   
-   return false;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber)
+         continue;
+      
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double posSL = PositionGetDouble(POSITION_SL);
+      double posTP = PositionGetDouble(POSITION_TP);
+      double currentPrice = (posType == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      
+      double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+      double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      
+      bool modified = false;
+      double newSL = posSL;
+      double newTP = posTP;
+      
+      // Trailing Stop Logic
+      if(InpEnableTrailingStop)
+      {
+         double trailDistance = InpTrailingStopDistance * point;
+         double trailStep = InpTrailingStopStep * point;
+         
+         if(posType == POSITION_TYPE_BUY)
+         {
+            // BUY position: only trail if price has moved in profit beyond trailing distance
+            if(currentPrice > posOpenPrice + trailDistance)
+            {
+               // Trail stop below current price
+               double newStopLevel = currentPrice - trailDistance;
+               
+               // Only modify if new SL is higher than current SL by at least step amount
+               if(newStopLevel > posSL + trailStep)
+               {
+                  newSL = NormalizeDouble(MathFloor(newStopLevel / tickSize) * tickSize, _Digits);
+                  modified = true;
+               }
+            }
+         }
+         else // POSITION_TYPE_SELL
+         {
+            // SELL position: only trail if price has moved in profit beyond trailing distance
+            if(currentPrice < posOpenPrice - trailDistance)
+            {
+               // Trail stop above current price
+               double newStopLevel = currentPrice + trailDistance;
+               
+               // Only modify if new SL is lower than current SL by at least step amount
+               if(newStopLevel < posSL - trailStep)
+               {
+                  newSL = NormalizeDouble(MathCeil(newStopLevel / tickSize) * tickSize, _Digits);
+                  modified = true;
+               }
+            }
+         }
+      }
+      
+      // Trailing TP Logic
+      if(InpEnableTrailingTP && posTP > 0)
+      {
+         double trailTPDistance = InpTrailingTPDistance * point;
+         double trailTPStep = InpTrailingTPStep * point;
+         
+         if(posType == POSITION_TYPE_BUY)
+         {
+            // BUY position: only trail TP if price has moved in profit
+            if(currentPrice > posOpenPrice + trailTPDistance)
+            {
+               // Move TP up with price
+               double newTPLevel = currentPrice + trailTPDistance;
+               
+               // Only modify if new TP is higher than current TP by at least step amount
+               if(newTPLevel > posTP + trailTPStep)
+               {
+                  newTP = NormalizeDouble(MathCeil(newTPLevel / tickSize) * tickSize, _Digits);
+                  modified = true;
+               }
+            }
+         }
+         else // POSITION_TYPE_SELL
+         {
+            // SELL position: only trail TP if price has moved in profit
+            if(currentPrice < posOpenPrice - trailTPDistance)
+            {
+               // Move TP down with price
+               double newTPLevel = currentPrice - trailTPDistance;
+               
+               // Only modify if new TP is lower than current TP by at least step amount
+               if(newTPLevel < posTP - trailTPStep)
+               {
+                  newTP = NormalizeDouble(MathFloor(newTPLevel / tickSize) * tickSize, _Digits);
+                  modified = true;
+               }
+            }
+         }
+      }
+      
+      // Modify position if needed
+      if(modified)
+      {
+         // Use current SL/TP if not trailing that particular one
+         if(!InpEnableTrailingStop)
+            newSL = posSL;
+         if(!InpEnableTrailingTP)
+            newTP = posTP;
+         
+         if(g_Trade.PositionModify(ticket, newSL, newTP))
+         {
+            if(InpDebugMode)
+               Print("[Trailing] Ticket=", ticket, " Type=", EnumToString(posType), 
+                     " NewSL=", newSL, " NewTP=", newTP);
+         }
+         else
+         {
+            if(InpDebugMode)
+               Print("[Trailing] ERROR: Failed to modify ticket=", ticket, 
+                     " - ", g_Trade.ResultRetcodeDescription());
+         }
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
-//| Open Sell Trade Template                                         |
+//| Get ATR value                                                     |
+//+------------------------------------------------------------------+
+double GetATR()
+{
+   if(g_ATRHandle == INVALID_HANDLE)
+      return 0;
+   
+   double atr[];
+   ArraySetAsSeries(atr, true);
+   
+   if(CopyBuffer(g_ATRHandle, 0, 0, 1, atr) <= 0)
+      return 0;
+   
+   return atr[0];
+}
+
+//+------------------------------------------------------------------+
+//| Check if position count exceeds maximum for this zone type      |
+//+------------------------------------------------------------------+
+bool HasPositionForZone(ENUM_SD_ZONE_TYPE zoneType)
+{
+   int positionCount = 0;
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber)
+         continue;
+      
+      // Count positions matching zone type
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(zoneType == SD_ZONE_SUPPLY && posType == POSITION_TYPE_SELL)
+         positionCount++;
+      else if(zoneType == SD_ZONE_DEMAND && posType == POSITION_TYPE_BUY)
+         positionCount++;
+   }
+   
+   // Return true if max trades reached
+   return (positionCount >= InpMaxTrade);
+}
+
+//+------------------------------------------------------------------+
+//| Open Buy Trade                                                    |
+//+------------------------------------------------------------------+
+bool OpenBuyTrade(CSupplyDemandZone *zone)
+{
+   if(zone == NULL || !InpEnableTrading)
+      return false;
+   
+   // Check if max trades reached
+   if(HasPositionForZone(SD_ZONE_DEMAND))
+   {
+      if(InpDebugMode)
+         Print("[OpenBuyTrade] Max trades (", InpMaxTrade, ") reached for DEMAND zones");
+      return false;
+   }
+   
+   double atr = GetATR();
+   if(atr <= 0)
+   {
+      Print("[OpenBuyTrade] ERROR: Invalid ATR value");
+      return false;
+   }
+   
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double sl = price - (atr * InpATRMultiplierSL);
+   double tp = price + (atr * InpATRMultiplierTP);
+   
+   // Normalize prices
+   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   sl = NormalizeDouble(MathFloor(sl / tickSize) * tickSize, _Digits);
+   tp = NormalizeDouble(MathCeil(tp / tickSize) * tickSize, _Digits);
+   
+   string comment = StringFormat("%s_BUY_D%.2f", InpTradeComment, zone.GetBottom());
+   
+   if(InpDebugMode)
+      Print("[OpenBuyTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
+   
+   if(g_Trade.Buy(InpLotSize, _Symbol, price, sl, tp, comment))
+   {
+      Print("[OpenBuyTrade] BUY order opened: Ticket=", g_Trade.ResultOrder(), 
+            " Entry=", price, " SL=", sl, " TP=", tp);
+      return true;
+   }
+   else
+   {
+      Print("[OpenBuyTrade] ERROR: Failed to open BUY - ", g_Trade.ResultRetcodeDescription());
+      return false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Open Sell Trade                                                   |
 //+------------------------------------------------------------------+
 bool OpenSellTrade(CSupplyDemandZone *zone)
 {
-   if(zone == NULL)
+   if(zone == NULL || !InpEnableTrading)
       return false;
    
-   // TODO: Implement sell trade logic
-   // - Calculate lot size based on risk
-   // - Set stop loss at zone top
-   // - Set take profit based on reward:risk
-   // - Use CTrade object to place order
+   // Check if max trades reached
+   if(HasPositionForZone(SD_ZONE_SUPPLY))
+   {
+      if(InpDebugMode)
+         Print("[OpenSellTrade] Max trades (", InpMaxTrade, ") reached for SUPPLY zones");
+      return false;
+   }
    
-   return false;
+   double atr = GetATR();
+   if(atr <= 0)
+   {
+      Print("[OpenSellTrade] ERROR: Invalid ATR value");
+      return false;
+   }
+   
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double sl = price + (atr * InpATRMultiplierSL);
+   double tp = price - (atr * InpATRMultiplierTP);
+   
+   // Normalize prices
+   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   sl = NormalizeDouble(MathCeil(sl / tickSize) * tickSize, _Digits);
+   tp = NormalizeDouble(MathFloor(tp / tickSize) * tickSize, _Digits);
+   
+   string comment = StringFormat("%s_SELL_S%.2f", InpTradeComment, zone.GetTop());
+   
+   if(InpDebugMode)
+      Print("[OpenSellTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
+   
+   if(g_Trade.Sell(InpLotSize, _Symbol, price, sl, tp, comment))
+   {
+      Print("[OpenSellTrade] SELL order opened: Ticket=", g_Trade.ResultOrder(),
+            " Entry=", price, " SL=", sl, " TP=", tp);
+      return true;
+   }
+   else
+   {
+      Print("[OpenSellTrade] ERROR: Failed to open SELL - ", g_Trade.ResultRetcodeDescription());
+      return false;
+   }
 }

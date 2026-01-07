@@ -7,6 +7,11 @@
 #property copyright "Copyright 2025, Cheruhaya Sulong"
 #property link      "https://www.mql5.com/en/users/cssulong"
 
+//--- Forward declarations for trade functions (implemented in .mq5)
+class CSupplyDemandZone;  // Forward declare class
+bool OpenBuyTrade(CSupplyDemandZone *zone);   // Demand zone entry
+bool OpenSellTrade(CSupplyDemandZone *zone);  // Supply zone entry
+
 //--- Enumerations
 enum ENUM_SD_ZONE_TYPE
 {
@@ -37,6 +42,8 @@ struct SSupplyDemandZone
    int               touchCount;         // Times price returned to zone
    bool              isValid;            // Is zone valid
    double            distanceToPrice;    // Distance to current price
+   bool              hasArrow;           // Has entry arrow been drawn
+   bool              priceHasLeft;       // Has price left the zone since formation
    
    // Chart objects
    string            rectangleName;      // Rectangle object name
@@ -60,7 +67,6 @@ private:
    color             m_demandColor;
    color             m_supplyColorFill;
    color             m_demandColorFill;
-   int               m_zoneTransparency;
    bool              m_showArrows;
    bool              m_showLabels;
 
@@ -84,11 +90,14 @@ public:
    bool              IsValid() const { return m_zone.isValid; }
    double            GetDistanceToPrice() const { return m_zone.distanceToPrice; }
    int               GetTouchCount() const { return m_zone.touchCount; }
+   SSupplyDemandZone GetZoneData() const { return m_zone; }
    
    // Setters
    void              SetState(ENUM_SD_ZONE_STATE state) { m_zone.state = state; }
    void              SetValid(bool valid) { m_zone.isValid = valid; }
    void              IncrementTouch() { m_zone.touchCount++; }
+   void              SetPriceHasLeft(bool hasLeft) { m_zone.priceHasLeft = hasLeft; }
+   void              SetHasArrow(bool hasArrow) { m_zone.hasArrow = hasArrow; }
    void              SetVisualSettings(color supplyCol, color demandCol, color supplyFill, 
                                       color demandFill, int transparency, bool arrows, bool labels);
    
@@ -107,12 +116,12 @@ public:
    void              Hide();
    void              Show();
    void              Delete();
+   void              DrawArrow(datetime touchTime, double touchPrice);  // Public for entry signal drawing
    
 private:
    string            GenerateObjectName(string prefix);
    color             GetZoneColor(bool filled);
    void              DrawRectangle();
-   void              DrawArrow();
    void              DrawLabel();
 };
 
@@ -130,7 +139,6 @@ CSupplyDemandZone::CSupplyDemandZone()
    m_demandColor = clrDodgerBlue;
    m_supplyColorFill = clrMistyRose;
    m_demandColorFill = clrLightSteelBlue;
-   m_zoneTransparency = 85;
    m_showArrows = true;
    m_showLabels = true;
    
@@ -164,6 +172,8 @@ bool CSupplyDemandZone::Create(ENUM_SD_ZONE_TYPE type, double top, double bottom
    m_zone.isValid = true;
    m_zone.state = SD_STATE_UNTESTED;
    m_zone.distanceToPrice = 0;
+   m_zone.hasArrow = false;  // Arrow not drawn yet
+   m_zone.priceHasLeft = false;  // Price hasn't left the zone yet
    
    // Generate object names
    m_zone.rectangleName = GenerateObjectName("SD_Zone_");
@@ -193,9 +203,9 @@ void CSupplyDemandZone::SetVisualSettings(color supplyCol, color demandCol, colo
    m_demandColor = demandCol;
    m_supplyColorFill = supplyFill;
    m_demandColorFill = demandFill;
-   m_zoneTransparency = transparency;
    m_showArrows = arrows;
    m_showLabels = labels;
+   // Note: transparency parameter ignored - transparency is now state-based
 }
 
 //+------------------------------------------------------------------+
@@ -292,34 +302,39 @@ void CSupplyDemandZone::DrawRectangle()
 }
 
 //+------------------------------------------------------------------+
-//| Draw arrow signal (OBJ_ARROW code 108)                          |
+//| Draw arrow signal (OBJ_ARROW code 108) at specific price/time   |
 //+------------------------------------------------------------------+
-void CSupplyDemandZone::DrawArrow()
+void CSupplyDemandZone::DrawArrow(datetime touchTime, double touchPrice)
 {
-   if(!m_showArrows)
+   if(!m_showArrows || m_zone.hasArrow)
       return;
    
-   // OBJ_ARROW code 108 is a circle marker
-   double arrowPrice = (m_zone.type == SD_ZONE_SUPPLY) ? m_zone.priceTop : m_zone.priceBottom;
-   
-   if(!ObjectCreate(m_chartID, m_zone.arrowName, OBJ_ARROW, 0, m_zone.timeStart, arrowPrice))
+   // OBJ_ARROW code 108 is a circle marker - draw at touch point
+   if(!ObjectCreate(m_chartID, m_zone.arrowName, OBJ_ARROW_CHECK, 0, touchTime, touchPrice))
    {
-      Print("Failed to create arrow: ", m_zone.arrowName, " Error: ", GetLastError());
+      // Print("Failed to create arrow: ", m_zone.arrowName, " Error: ", GetLastError());
       return;
    }
    
    color arrowColor = GetZoneColor(false);
    ObjectSetInteger(m_chartID, m_zone.arrowName, OBJPROP_COLOR, arrowColor);
    ObjectSetInteger(m_chartID, m_zone.arrowName, OBJPROP_ARROWCODE, 108); // Circle marker
-   ObjectSetInteger(m_chartID, m_zone.arrowName, OBJPROP_WIDTH, 2);
+   ObjectSetInteger(m_chartID, m_zone.arrowName, OBJPROP_WIDTH, 1);
    ObjectSetInteger(m_chartID, m_zone.arrowName, OBJPROP_BACK, false);
-   ObjectSetInteger(m_chartID, m_zone.arrowName, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(m_chartID, m_zone.arrowName, OBJPROP_SELECTABLE, true);
    ObjectSetInteger(m_chartID, m_zone.arrowName, OBJPROP_HIDDEN, true);
    
-   string tooltip = StringFormat("%s Signal | Vol: %I64d", 
+   string tooltip = StringFormat("%s Entry Signal\nVol: %I64d", 
                                  (m_zone.type == SD_ZONE_SUPPLY) ? "SELL" : "BUY",
                                  m_zone.volumeTotal);
    ObjectSetString(m_chartID, m_zone.arrowName, OBJPROP_TOOLTIP, tooltip);
+
+   if(m_zone.type == SD_ZONE_SUPPLY)
+      ObjectSetInteger(m_chartID, m_zone.arrowName, OBJPROP_ANCHOR, ANCHOR_BOTTOM);
+   else
+      ObjectSetInteger(m_chartID, m_zone.arrowName, OBJPROP_ANCHOR, ANCHOR_TOP);
+   
+   m_zone.hasArrow = true;  // Mark arrow as drawn
 }
 
 //+------------------------------------------------------------------+
@@ -335,7 +350,7 @@ void CSupplyDemandZone::DrawLabel()
    
    if(!ObjectCreate(m_chartID, m_zone.labelName, OBJ_TEXT, 0, middleTime, middlePrice))
    {
-      Print("Failed to create label: ", m_zone.labelName, " Error: ", GetLastError());
+      // Print("Failed to create label: ", m_zone.labelName, " Error: ", GetLastError());
       return;
    }
    
@@ -348,11 +363,23 @@ void CSupplyDemandZone::DrawLabel()
    else
       volumeText = IntegerToString(m_zone.volumeTotal);
    
-   string labelText = StringFormat("Vol: %s\nAvg: %.0f", volumeText, m_zone.volumeAvg);
+   // Format state display
+   string stateText = "";
+   switch(m_zone.state)
+   {
+      case SD_STATE_UNTESTED: stateText = "STRONG"; break;
+      case SD_STATE_TESTED:   stateText = "WEAK"; break;
+      case SD_STATE_ACTIVE:   stateText = "ACTIVE"; break;
+      case SD_STATE_BROKEN:   stateText = "BROKEN"; break;
+      default:                stateText = "UNKNOWN"; break;
+   }
+   
+   string labelText = StringFormat("%s \nVol: %s \nAvg: %.0f", stateText, volumeText, m_zone.volumeAvg);
    
    ObjectSetString(m_chartID, m_zone.labelName, OBJPROP_TEXT, labelText);
-   ObjectSetInteger(m_chartID, m_zone.labelName, OBJPROP_COLOR, GetZoneColor(false));
+   ObjectSetInteger(m_chartID, m_zone.labelName, OBJPROP_COLOR, clrWhite);
    ObjectSetInteger(m_chartID, m_zone.labelName, OBJPROP_FONTSIZE, 8);
+   ObjectSetString(m_chartID, m_zone.labelName, OBJPROP_FONT, "Arial");
    ObjectSetInteger(m_chartID, m_zone.labelName, OBJPROP_ANCHOR, ANCHOR_CENTER);
    ObjectSetInteger(m_chartID, m_zone.labelName, OBJPROP_BACK, false);
    ObjectSetInteger(m_chartID, m_zone.labelName, OBJPROP_SELECTABLE, false);
@@ -365,7 +392,7 @@ void CSupplyDemandZone::DrawLabel()
 bool CSupplyDemandZone::Draw()
 {
    DrawRectangle();
-   DrawArrow();
+   // Arrow is drawn only when price touches zone (see UpdateAllZones)
    DrawLabel();
    return true;
 }
@@ -382,7 +409,7 @@ bool CSupplyDemandZone::ExtendZone(datetime newEndTime)
    {
       if(!ObjectMove(m_chartID, m_zone.rectangleName, 1, newEndTime, m_zone.priceBottom))
       {
-         Print("Failed to extend zone: ", m_zone.rectangleName, " Error: ", GetLastError());
+         // Print("Failed to extend zone: ", m_zone.rectangleName, " Error: ", GetLastError());
          return false;
       }
    }
@@ -405,19 +432,47 @@ void CSupplyDemandZone::Update()
    // Extend zone to current time
    ExtendZone(TimeCurrent());
    
-   // Update rectangle fill based on state
+   // Update rectangle transparency based on zone state
    if(ObjectFind(m_chartID, m_zone.rectangleName) >= 0)
    {
+      color borderColor = GetZoneColor(false);
       color fillColor = GetZoneColor(true);
       
-      // Adjust transparency based on state
-      int transparency = m_zoneTransparency;
-      if(m_zone.state == SD_STATE_BROKEN)
-         transparency = 95; // More transparent if broken
-      else if(m_zone.state == SD_STATE_ACTIVE)
-         transparency = 70; // Less transparent if active
+      // Set transparency based on zone validity and state
+      int transparency;
       
+      if(m_zone.state == SD_STATE_UNTESTED)
+      {
+         // Strongest zones - most opaque (low transparency)
+         transparency = 40;  // Very solid/opaque
+      }
+      else if(m_zone.state == SD_STATE_TESTED)
+      {
+         // Tested zones - medium opacity
+         transparency = 65;
+      }
+      else if(m_zone.state == SD_STATE_ACTIVE)
+      {
+         // Currently active - medium opacity with different color
+         transparency = 50;
+      }
+      else if(m_zone.state == SD_STATE_BROKEN)
+      {
+         // Broken zones - very transparent (almost invisible)
+         transparency = 95;
+      }
+      else
+      {
+         // Default
+         transparency = 70;
+      }
+      
+      ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_COLOR, borderColor);
       ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_BGCOLOR, fillColor);
+      
+      // Update border width - thicker for untested zones
+      int borderWidth = (m_zone.state == SD_STATE_UNTESTED) ? 2 : 1;
+      ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_WIDTH, borderWidth);
    }
 }
 
@@ -442,12 +497,13 @@ void CSupplyDemandZone::Show()
 }
 
 //+------------------------------------------------------------------+
-//| Delete zone and all objects                                      |
+//| Delete zone and all objects (except arrows - they persist)      |
 //+------------------------------------------------------------------+
 void CSupplyDemandZone::Delete()
 {
    ObjectDelete(m_chartID, m_zone.rectangleName);
-   ObjectDelete(m_chartID, m_zone.arrowName);
+   // Keep arrow on chart even when zone is deleted
+   // ObjectDelete(m_chartID, m_zone.arrowName);
    ObjectDelete(m_chartID, m_zone.labelName);
 }
 
@@ -469,6 +525,7 @@ private:
    int               m_maxBarsInZone;     // Maximum bars to form a zone
    double            m_minZoneSize;       // Minimum zone size in points
    double            m_maxZoneSize;       // Maximum zone size in points
+   double            m_minPriceLeftDistance; // Minimum points price must move away to be considered "left"
    
    // Display settings
    int               m_showZones;         // -1 = all, 0 = none, N = show N closest zones
@@ -476,12 +533,12 @@ private:
    color             m_demandColor;
    color             m_supplyColorFill;
    color             m_demandColorFill;
-   int               m_zoneTransparency;
    bool              m_showArrows;
    bool              m_showLabels;
    
    // Tracking
    datetime          m_lastUpdateTime;
+   int               m_lastScannedBar;    // Track last bar index scanned for zones
 
 public:
                      CSupplyDemandManager();
@@ -490,7 +547,7 @@ public:
    // Initialization
    bool              Initialize(string symbol, ENUM_TIMEFRAMES timeframe, int lookback, 
                                long volumeThreshold, int minBars, int maxBars,
-                               double minSize, double maxSize);
+                               double minSize, double maxSize, double minPriceLeftDist);
    
    // Settings
    void              SetShowZones(int showZones) { m_showZones = showZones; }
@@ -501,6 +558,7 @@ public:
    bool              DetectZones();
    void              UpdateAllZones();
    void              ManageZoneDisplay();
+   bool              DetectNewZones(int lookbackBars = 20);  // Detect zones in recent bars only
    
    // Analysis
    int               GetSupplyZoneCount() const { return ArraySize(m_supplyZones); }
@@ -545,11 +603,11 @@ CSupplyDemandManager::CSupplyDemandManager()
    m_demandColor = clrDodgerBlue;
    m_supplyColorFill = clrMistyRose;
    m_demandColorFill = clrLightSteelBlue;
-   m_zoneTransparency = 85;
    m_showArrows = true;
    m_showLabels = true;
    
    m_lastUpdateTime = 0;
+   m_lastScannedBar = 0;  // Initialize tracking
    
    ArrayResize(m_supplyZones, 0);
    ArrayResize(m_demandZones, 0);
@@ -568,7 +626,7 @@ CSupplyDemandManager::~CSupplyDemandManager()
 //+------------------------------------------------------------------+
 bool CSupplyDemandManager::Initialize(string symbol, ENUM_TIMEFRAMES timeframe, int lookback,
                                       long volumeThreshold, int minBars, int maxBars,
-                                      double minSize, double maxSize)
+                                      double minSize, double maxSize, double minPriceLeftDist)
 {
    m_symbol = symbol;
    m_timeframe = timeframe;
@@ -578,6 +636,7 @@ bool CSupplyDemandManager::Initialize(string symbol, ENUM_TIMEFRAMES timeframe, 
    m_maxBarsInZone = maxBars;
    m_minZoneSize = minSize;
    m_maxZoneSize = maxSize;
+   m_minPriceLeftDistance = minPriceLeftDist;
    
    return true;
 }
@@ -592,9 +651,9 @@ void CSupplyDemandManager::SetVisualSettings(color supplyCol, color demandCol, c
    m_demandColor = demandCol;
    m_supplyColorFill = supplyFill;
    m_demandColorFill = demandFill;
-   m_zoneTransparency = transparency;
    m_showArrows = arrows;
    m_showLabels = labels;
+   // Note: transparency parameter ignored - transparency is now state-based
    
    // Update existing zones
    for(int i = 0; i < ArraySize(m_supplyZones); i++)
@@ -689,53 +748,59 @@ bool CSupplyDemandManager::DetectSupplyZoneByVolume(int startBar, double &top, d
    CopyOpen(m_symbol, m_timeframe, 0, startBar + 10, open);
    CopyTickVolume(m_symbol, m_timeframe, 0, startBar + 10, volume);
    
-   // Look for bearish bars with high volume
-   bool isBearish = close[startBar] < open[startBar];
-   if(!isBearish)
-      return false;
-   
+   // Look for potential supply zone (any bar type, volume based)
    long barVolume = volume[startBar];
-   if(barVolume < m_volumeThreshold)
+   
+   // If volume threshold is set, check it; otherwise accept any bar
+   if(m_volumeThreshold > 0 && barVolume < m_volumeThreshold)
       return false;
    
-   // Find the consolidation/rejection zone
+   // Check if this is a local high
+   bool isLocalHigh = (high[startBar] >= high[startBar-1] && high[startBar] >= high[startBar-2] &&
+                       high[startBar] >= high[startBar+1] && high[startBar] >= high[startBar+2]);
+   
+   if(!isLocalHigh)
+      return false;
+   
+   // Find the consolidation zone
    top = high[startBar];
    bottom = low[startBar];
    volumeTotal = barVolume;
    bars = 1;
    
-   // Look for consecutive bars forming the zone
+   // Look for consecutive bars forming the zone (consolidation area)
    for(int i = startBar - 1; i >= startBar - m_maxBarsInZone && i >= 0; i--)
    {
-      // Check if bars are forming a base (limited range)
-      if(high[i] > top * 1.002 || low[i] < bottom * 0.998) // 0.2% tolerance
+      double zoneRange = top - bottom;
+      
+      // Allow bars that stay within reasonable range
+      if(high[i] > top + zoneRange * 0.3 || low[i] < bottom - zoneRange * 0.3)
          break;
       
       if(high[i] > top) top = high[i];
       if(low[i] < bottom) bottom = low[i];
       
-      // Only count bearish or consolidation bars in zone
-      if(close[i] <= open[i] || MathAbs(close[i] - open[i]) < (high[i] - low[i]) * 0.3)
-      {
-         volumeTotal += volume[i];
-         bars++;
-      }
-      else
+      volumeTotal += volume[i];
+      bars++;
+      
+      if(bars >= m_maxBarsInZone)
          break;
    }
    
-   // Verify there's a strong move down after the zone (confirms selling pressure)
-   bool hasStrongMove = false;
+   // Verify there's a downward move after the zone
+   bool hasMove = false;
    for(int i = startBar + 1; i <= startBar + 5 && i < ArraySize(close); i++)
    {
-      if(low[i] < bottom - (top - bottom) * 1.5)
+      double moveSize = top - low[i];
+      double zoneSize = top - bottom;
+      if(moveSize > zoneSize * 0.5) // At least 50% of zone size
       {
-         hasStrongMove = true;
+         hasMove = true;
          break;
       }
    }
    
-   if(!hasStrongMove || bars < m_minBarsInZone)
+   if(!hasMove || bars < m_minBarsInZone)
       return false;
    
    volumeAvg = (double)volumeTotal / bars;
@@ -767,53 +832,59 @@ bool CSupplyDemandManager::DetectDemandZoneByVolume(int startBar, double &top, d
    CopyOpen(m_symbol, m_timeframe, 0, startBar + 10, open);
    CopyTickVolume(m_symbol, m_timeframe, 0, startBar + 10, volume);
    
-   // Look for bullish bars with high volume
-   bool isBullish = close[startBar] > open[startBar];
-   if(!isBullish)
-      return false;
-   
+   // Look for potential demand zone (any bar type, volume based)
    long barVolume = volume[startBar];
-   if(barVolume < m_volumeThreshold)
+   
+   // If volume threshold is set, check it; otherwise accept any bar
+   if(m_volumeThreshold > 0 && barVolume < m_volumeThreshold)
       return false;
    
-   // Find the consolidation/reaction zone
+   // Check if this is a local low
+   bool isLocalLow = (low[startBar] <= low[startBar-1] && low[startBar] <= low[startBar-2] &&
+                      low[startBar] <= low[startBar+1] && low[startBar] <= low[startBar+2]);
+   
+   if(!isLocalLow)
+      return false;
+   
+   // Find the consolidation zone
    top = high[startBar];
    bottom = low[startBar];
    volumeTotal = barVolume;
    bars = 1;
    
-   // Look for consecutive bars forming the zone
+   // Look for consecutive bars forming the zone (consolidation area)
    for(int i = startBar - 1; i >= startBar - m_maxBarsInZone && i >= 0; i--)
    {
-      // Check if bars are forming a base (limited range)
-      if(high[i] > top * 1.002 || low[i] < bottom * 0.998) // 0.2% tolerance
+      double zoneRange = top - bottom;
+      
+      // Allow bars that stay within reasonable range
+      if(high[i] > top + zoneRange * 0.3 || low[i] < bottom - zoneRange * 0.3)
          break;
       
       if(high[i] > top) top = high[i];
       if(low[i] < bottom) bottom = low[i];
       
-      // Only count bullish or consolidation bars in zone
-      if(close[i] >= open[i] || MathAbs(close[i] - open[i]) < (high[i] - low[i]) * 0.3)
-      {
-         volumeTotal += volume[i];
-         bars++;
-      }
-      else
+      volumeTotal += volume[i];
+      bars++;
+      
+      if(bars >= m_maxBarsInZone)
          break;
    }
    
-   // Verify there's a strong move up after the zone (confirms buying pressure)
-   bool hasStrongMove = false;
+   // Verify there's an upward move after the zone
+   bool hasMove = false;
    for(int i = startBar + 1; i <= startBar + 5 && i < ArraySize(close); i++)
    {
-      if(high[i] > top + (top - bottom) * 1.5)
+      double moveSize = high[i] - bottom;
+      double zoneSize = top - bottom;
+      if(moveSize > zoneSize * 0.5) // At least 50% of zone size
       {
-         hasStrongMove = true;
+         hasMove = true;
          break;
       }
    }
    
-   if(!hasStrongMove || bars < m_minBarsInZone)
+   if(!hasMove || bars < m_minBarsInZone)
       return false;
    
    volumeAvg = (double)volumeTotal / bars;
@@ -844,7 +915,7 @@ bool CSupplyDemandManager::AddSupplyZone(double top, double bottom, datetime tim
    }
    
    zone.SetVisualSettings(m_supplyColor, m_demandColor, m_supplyColorFill, m_demandColorFill,
-                         m_zoneTransparency, m_showArrows, m_showLabels);
+                         0, m_showArrows, m_showLabels);  // transparency ignored
    
    int size = ArraySize(m_supplyZones);
    ArrayResize(m_supplyZones, size + 1);
@@ -876,7 +947,7 @@ bool CSupplyDemandManager::AddDemandZone(double top, double bottom, datetime tim
    }
    
    zone.SetVisualSettings(m_supplyColor, m_demandColor, m_supplyColorFill, m_demandColorFill,
-                         m_zoneTransparency, m_showArrows, m_showLabels);
+                         0, m_showArrows, m_showLabels);  // transparency ignored
    
    int size = ArraySize(m_demandZones);
    ArrayResize(m_demandZones, size + 1);
@@ -896,7 +967,13 @@ bool CSupplyDemandManager::DetectZones()
    datetime time[];
    ArraySetAsSeries(time, true);
    if(CopyTime(m_symbol, m_timeframe, 0, m_lookbackBars, time) <= 0)
+   {
+      // Print("ERROR: Failed to copy time data");
       return false;
+   }
+   
+   int detectedSupply = 0;
+   int detectedDemand = 0;
    
    // Scan for zones
    for(int i = 10; i < m_lookbackBars - 10; i++)
@@ -909,62 +986,400 @@ bool CSupplyDemandManager::DetectZones()
       
       if(DetectSupplyZoneByVolume(i, top, bottom, volumeTotal, volumeAvg, bars))
       {
-         AddSupplyZone(top, bottom, time[i], volumeTotal, volumeAvg, bars);
+         if(AddSupplyZone(top, bottom, time[i], volumeTotal, volumeAvg, bars))
+            detectedSupply++;
       }
       
       // Detect demand zones
       if(DetectDemandZoneByVolume(i, top, bottom, volumeTotal, volumeAvg, bars))
       {
-         AddDemandZone(top, bottom, time[i], volumeTotal, volumeAvg, bars);
+         if(AddDemandZone(top, bottom, time[i], volumeTotal, volumeAvg, bars))
+            detectedDemand++;
       }
    }
    
-   Print("Supply zones detected: ", ArraySize(m_supplyZones));
-   Print("Demand zones detected: ", ArraySize(m_demandZones));
+   // Print("Zone detection complete: Supply=", detectedSupply, " Demand=", detectedDemand);
+   Print("[DetectZones] Initial detection: Supply=", detectedSupply, " Demand=", detectedDemand);
+   
+   // Draw all zones immediately
+   for(int i = 0; i < ArraySize(m_supplyZones); i++)
+   {
+      if(m_supplyZones[i] != NULL && m_supplyZones[i].IsValid())
+         m_supplyZones[i].Draw();
+   }
+   
+   for(int i = 0; i < ArraySize(m_demandZones); i++)
+   {
+      if(m_demandZones[i] != NULL && m_demandZones[i].IsValid())
+         m_demandZones[i].Draw();
+   }
+   
+   Print("[DetectZones] After draw: Supply=", ArraySize(m_supplyZones), " Demand=", ArraySize(m_demandZones));
    
    m_lastUpdateTime = TimeCurrent();
+   m_lastScannedBar = m_lookbackBars;  // Mark initial scan complete
+   ChartRedraw();
    
    return true;
 }
 
 //+------------------------------------------------------------------+
-//| Update all zones                                                  |
+//| Detect new zones in recent bars only (no re-detection)          |
+//+------------------------------------------------------------------+
+bool CSupplyDemandManager::DetectNewZones(int lookbackBars = 20)
+{
+   datetime time[];
+   ArraySetAsSeries(time, true);
+   
+   // Scan only the new bars since last scan
+   int barsToScan = MathMin(lookbackBars + 20, m_lookbackBars);  // Add buffer for local high/low detection
+   if(CopyTime(m_symbol, m_timeframe, 0, barsToScan, time) <= 0)
+      return false;
+   
+   int detectedSupply = 0;
+   int detectedDemand = 0;
+   
+   // Only scan from bar 10 to the last scanned position (avoid re-scanning old bars)
+   int scanStart = 10;
+   int scanEnd = MathMin(lookbackBars, barsToScan - 10);
+   
+   Print("[DetectNewZones] Scanning bars ", scanStart, " to ", scanEnd);
+   
+   // Scan bars that haven't been scanned yet
+   for(int i = scanStart; i < scanEnd; i++)
+   {
+      double top, bottom;
+      long volumeTotal;
+      double volumeAvg;
+      int bars;
+      
+      // Detect supply zones
+      if(DetectSupplyZoneByVolume(i, top, bottom, volumeTotal, volumeAvg, bars))
+      {
+         if(AddSupplyZone(top, bottom, time[i], volumeTotal, volumeAvg, bars))
+         {
+            detectedSupply++;
+            Print("[DetectNewZones] New SUPPLY zone at bar ", i, " | Price: ", top, "-", bottom);
+         }
+      }
+      
+      // Detect demand zones
+      if(DetectDemandZoneByVolume(i, top, bottom, volumeTotal, volumeAvg, bars))
+      {
+         if(AddDemandZone(top, bottom, time[i], volumeTotal, volumeAvg, bars))
+         {
+            detectedDemand++;
+            Print("[DetectNewZones] New DEMAND zone at bar ", i, " | Price: ", top, "-", bottom);
+         }
+      }
+   }
+   
+   if(detectedSupply > 0 || detectedDemand > 0)
+   {
+      Print("[DetectNewZones] Found new zones: Supply=", detectedSupply, " Demand=", detectedDemand);
+      Print("[DetectNewZones] Total zones: Supply=", ArraySize(m_supplyZones), " Demand=", ArraySize(m_demandZones));
+      
+      // Draw all zones (newly detected ones will be drawn)
+      for(int i = 0; i < ArraySize(m_supplyZones); i++)
+      {
+         if(m_supplyZones[i] != NULL && m_supplyZones[i].IsValid())
+            m_supplyZones[i].Draw();
+      }
+      
+      for(int i = 0; i < ArraySize(m_demandZones); i++)
+      {
+         if(m_demandZones[i] != NULL && m_demandZones[i].IsValid())
+            m_demandZones[i].Draw();
+      }
+      
+      ChartRedraw();
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Update all zones (apply S&D validity rules)                     |
 //+------------------------------------------------------------------+
 void CSupplyDemandManager::UpdateAllZones()
 {
    double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
    
-   // Update supply zones
-   for(int i = 0; i < ArraySize(m_supplyZones); i++)
+   int initialSupply = ArraySize(m_supplyZones);
+   int initialDemand = ArraySize(m_demandZones);
+   Print("[UpdateAllZones START] Supply=", initialSupply, " Demand=", initialDemand, " Price=", currentPrice);
+   
+   // Update supply zones (backwards to safely delete)
+   for(int i = ArraySize(m_supplyZones) - 1; i >= 0; i--)
    {
       if(m_supplyZones[i] != NULL && m_supplyZones[i].IsValid())
       {
          m_supplyZones[i].UpdateDistanceToPrice(currentPrice);
-         m_supplyZones[i].Update();
          
-         // Check zone state
+         // Check zone state based on S&D rules
          if(m_supplyZones[i].HasPriceBroken(currentPrice))
-            m_supplyZones[i].SetState(SD_STATE_BROKEN);
+         {
+            // Zone is broken - delete it
+            Print("[HasPriceBroken] SUPPLY[", i, "] Price=", currentPrice, " > Top=", m_supplyZones[i].GetTop(), " - DELETING");
+            delete m_supplyZones[i];
+            
+            // Shift array down
+            for(int j = i; j < ArraySize(m_supplyZones) - 1; j++)
+               m_supplyZones[j] = m_supplyZones[j + 1];
+            
+            ArrayResize(m_supplyZones, ArraySize(m_supplyZones) - 1);
+            continue;  // Skip to next zone
+         }
          else if(m_supplyZones[i].IsPriceTouching(currentPrice, 0))
-            m_supplyZones[i].SetState(SD_STATE_ACTIVE);
+         {
+            // Price is currently at the zone
+            if(m_supplyZones[i].GetState() == SD_STATE_UNTESTED)
+            {
+               // Check if price has left the zone before
+               if(m_supplyZones[i].GetZoneData().priceHasLeft)
+               {
+                  // Price returned after leaving - NOW draw entry arrow and open trade
+                  Print("[IsPriceTouching] SUPPLY[", i, "] RETURN after leaving | Price=", currentPrice, " Bottom=", m_supplyZones[i].GetBottom(), " Top=", m_supplyZones[i].GetTop());
+                  m_supplyZones[i].DrawArrow(TimeCurrent(), currentPrice);
+                  m_supplyZones[i].SetState(SD_STATE_ACTIVE);
+                  
+                  // Open SELL trade for supply zone
+                  OpenSellTrade(m_supplyZones[i]);
+               }
+               else
+               {
+                  // Price still in zone from formation - wait for it to leave first
+                  Print("[IsPriceTouching] SUPPLY[", i, "] Still in zone from formation - waiting for exit");
+               }
+            }
+            else if(m_supplyZones[i].GetState() == SD_STATE_TESTED)
+            {
+               // Weak zone - also draw entry arrow if price returns after leaving
+               if(!m_supplyZones[i].GetZoneData().hasArrow)
+               {
+                  Print("[IsPriceTouching] SUPPLY[", i, "] WEAK zone return | Price=", currentPrice);
+                  m_supplyZones[i].DrawArrow(TimeCurrent(), currentPrice);
+                  
+                  // Open SELL trade for weak supply zone
+                  OpenSellTrade(m_supplyZones[i]);
+               }
+               m_supplyZones[i].SetState(SD_STATE_ACTIVE);
+            }
+            else
+            {
+               m_supplyZones[i].SetState(SD_STATE_ACTIVE);
+            }
+         }
+         else
+         {
+            // Price is NOT touching the zone
+            if(!m_supplyZones[i].GetZoneData().priceHasLeft)
+            {
+               // Check if price has moved far enough away from zone
+               double zoneTop = m_supplyZones[i].GetTop();
+               double zoneBottom = m_supplyZones[i].GetBottom();
+               double point = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
+               double minDistance = 0;
+               
+               if(m_minPriceLeftDistance == 0)
+               {
+                  // Auto-calculate distance based on nearest DEMAND zone below
+                  double nearestDemandTop = 0;
+                  bool foundDemand = false;
+                  
+                  for(int j = 0; j < ArraySize(m_demandZones); j++)
+                  {
+                     if(m_demandZones[j] != NULL && m_demandZones[j].IsValid())
+                     {
+                        double demandTop = m_demandZones[j].GetTop();
+                        // Find demand zone below current supply zone
+                        if(demandTop < zoneBottom)
+                        {
+                           if(!foundDemand || demandTop > nearestDemandTop)
+                           {
+                              nearestDemandTop = demandTop;
+                              foundDemand = true;
+                           }
+                        }
+                     }
+                  }
+                  
+                  if(foundDemand)
+                  {
+                     // Distance = from zone bottom to demand zone top
+                     minDistance = zoneBottom - nearestDemandTop;
+                  }
+                  else
+                  {
+                     // No opposite zone found, use zone size as minimum
+                     minDistance = (zoneTop - zoneBottom) * 2;
+                  }
+               }
+               else
+               {
+                  minDistance = m_minPriceLeftDistance * point;
+               }
+               
+               // Price must be below zone top by at least minDistance
+               if(currentPrice < zoneTop - minDistance)
+               {
+                  // Mark that price has left the zone for the first time
+                  m_supplyZones[i].SetPriceHasLeft(true);
+                  Print("[UpdateAllZones] SUPPLY[", i, "] Price LEFT zone - now validated (distance=", 
+                        (zoneTop - currentPrice) / point, " points, required=", minDistance / point, " points)");
+               }
+            }
+            
+            if(m_supplyZones[i].GetState() == SD_STATE_ACTIVE)
+            {
+               // Price has left an active zone - mark as tested
+               m_supplyZones[i].SetState(SD_STATE_TESTED);
+               m_supplyZones[i].IncrementTouch();
+               // Reset arrow flag so next return draws new arrow for weak zone
+               m_supplyZones[i].SetHasArrow(false);
+            }
+         }
+         
+         m_supplyZones[i].Update();
       }
    }
    
-   // Update demand zones
-   for(int i = 0; i < ArraySize(m_demandZones); i++)
+   // Update demand zones (backwards to safely delete)
+   for(int i = ArraySize(m_demandZones) - 1; i >= 0; i--)
    {
       if(m_demandZones[i] != NULL && m_demandZones[i].IsValid())
       {
          m_demandZones[i].UpdateDistanceToPrice(currentPrice);
-         m_demandZones[i].Update();
          
-         // Check zone state
+         // Check zone state based on S&D rules
          if(m_demandZones[i].HasPriceBroken(currentPrice))
-            m_demandZones[i].SetState(SD_STATE_BROKEN);
+         {
+            // Zone is broken - delete it
+            Print("[HasPriceBroken] DEMAND[", i, "] Price=", currentPrice, " < Bottom=", m_demandZones[i].GetBottom(), " - DELETING");
+            delete m_demandZones[i];
+            
+            // Shift array down
+            for(int j = i; j < ArraySize(m_demandZones) - 1; j++)
+               m_demandZones[j] = m_demandZones[j + 1];
+            
+            ArrayResize(m_demandZones, ArraySize(m_demandZones) - 1);
+            continue;  // Skip to next zone
+         }
          else if(m_demandZones[i].IsPriceTouching(currentPrice, 0))
-            m_demandZones[i].SetState(SD_STATE_ACTIVE);
+         {
+            // Price is currently at the zone
+            if(m_demandZones[i].GetState() == SD_STATE_UNTESTED)
+            {
+               // Check if price has left the zone before
+               if(m_demandZones[i].GetZoneData().priceHasLeft)
+               {
+                  // Price returned after leaving - NOW draw entry arrow and open trade
+                  Print("[IsPriceTouching] DEMAND[", i, "] RETURN after leaving | Price=", currentPrice, " Bottom=", m_demandZones[i].GetBottom(), " Top=", m_demandZones[i].GetTop());
+                  m_demandZones[i].DrawArrow(TimeCurrent(), currentPrice);
+                  m_demandZones[i].SetState(SD_STATE_ACTIVE);
+                  
+                  // Open BUY trade for demand zone
+                  OpenBuyTrade(m_demandZones[i]);
+               }
+               else
+               {
+                  // Price still in zone from formation - wait for it to leave first
+                  Print("[IsPriceTouching] DEMAND[", i, "] Still in zone from formation - waiting for exit");
+               }
+            }
+            else if(m_demandZones[i].GetState() == SD_STATE_TESTED)
+            {
+               // Weak zone - also draw entry arrow if price returns after leaving
+               if(!m_demandZones[i].GetZoneData().hasArrow)
+               {
+                  Print("[IsPriceTouching] DEMAND[", i, "] WEAK zone return | Price=", currentPrice);
+                  m_demandZones[i].DrawArrow(TimeCurrent(), currentPrice);
+                  
+                  // Open BUY trade for weak demand zone
+                  OpenBuyTrade(m_demandZones[i]);
+               }
+               m_demandZones[i].SetState(SD_STATE_ACTIVE);
+            }
+            else
+            {
+               m_demandZones[i].SetState(SD_STATE_ACTIVE);
+            }
+         }
+         else
+         {
+            // Price is NOT touching the zone
+            if(!m_demandZones[i].GetZoneData().priceHasLeft)
+            {
+               // Check if price has moved far enough away from zone
+               double zoneBottom = m_demandZones[i].GetBottom();
+               double zoneTop = m_demandZones[i].GetTop();
+               double point = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
+               double minDistance = 0;
+               
+               if(m_minPriceLeftDistance == 0)
+               {
+                  // Auto-calculate distance based on nearest SUPPLY zone above
+                  double nearestSupplyBottom = DBL_MAX;
+                  bool foundSupply = false;
+                  
+                  for(int j = 0; j < ArraySize(m_supplyZones); j++)
+                  {
+                     if(m_supplyZones[j] != NULL && m_supplyZones[j].IsValid())
+                     {
+                        double supplyBottom = m_supplyZones[j].GetBottom();
+                        // Find supply zone above current demand zone
+                        if(supplyBottom > zoneTop)
+                        {
+                           if(!foundSupply || supplyBottom < nearestSupplyBottom)
+                           {
+                              nearestSupplyBottom = supplyBottom;
+                              foundSupply = true;
+                           }
+                        }
+                     }
+                  }
+                  
+                  if(foundSupply)
+                  {
+                     // Distance = from zone top to supply zone bottom
+                     minDistance = nearestSupplyBottom - zoneTop;
+                  }
+                  else
+                  {
+                     // No opposite zone found, use zone size as minimum
+                     minDistance = (zoneTop - zoneBottom) * 2;
+                  }
+               }
+               else
+               {
+                  minDistance = m_minPriceLeftDistance * point;
+               }
+               
+               // Price must be above zone bottom by at least minDistance
+               if(currentPrice > zoneBottom + minDistance)
+               {
+                  // Mark that price has left the zone for the first time
+                  m_demandZones[i].SetPriceHasLeft(true);
+                  Print("[UpdateAllZones] DEMAND[", i, "] Price LEFT zone - now validated (distance=", 
+                        (currentPrice - zoneBottom) / point, " points, required=", minDistance / point, " points)");
+               }
+            }
+            
+            if(m_demandZones[i].GetState() == SD_STATE_ACTIVE)
+            {
+               // Price has left an active zone - mark as tested
+               m_demandZones[i].SetState(SD_STATE_TESTED);
+               m_demandZones[i].IncrementTouch();
+               // Reset arrow flag so next return draws new arrow for weak zone
+               m_demandZones[i].SetHasArrow(false);
+            }
+         }
+         
+         m_demandZones[i].Update();
       }
    }
+   
+   Print("[UpdateAllZones END] Supply=", ArraySize(m_supplyZones), " Demand=", ArraySize(m_demandZones));
 }
 
 //+------------------------------------------------------------------+
@@ -1017,32 +1432,72 @@ void CSupplyDemandManager::SortZonesByDistance(double currentPrice)
 }
 
 //+------------------------------------------------------------------+
-//| Show only closest N zones                                        |
+//| Show only closest N zones (combined supply and demand)          |
 //+------------------------------------------------------------------+
 void CSupplyDemandManager::ShowClosestZones(int count)
 {
-   // Show first N supply zones, hide rest
+   // Create combined array of all zones with distances
+   struct SZoneDistance
+   {
+      CSupplyDemandZone *zone;
+      double distance;
+   };
+   
+   SZoneDistance allZones[];
+   int totalZones = 0;
+   
+   // Add all valid supply zones
    for(int i = 0; i < ArraySize(m_supplyZones); i++)
    {
       if(m_supplyZones[i] != NULL && m_supplyZones[i].IsValid())
       {
-         if(i < count)
-            m_supplyZones[i].Show();
-         else
-            m_supplyZones[i].Hide();
+         ArrayResize(allZones, totalZones + 1);
+         allZones[totalZones].zone = m_supplyZones[i];
+         allZones[totalZones].distance = m_supplyZones[i].GetDistanceToPrice();
+         totalZones++;
       }
    }
    
-   // Show first N demand zones, hide rest
+   // Add all valid demand zones
    for(int i = 0; i < ArraySize(m_demandZones); i++)
    {
       if(m_demandZones[i] != NULL && m_demandZones[i].IsValid())
       {
-         if(i < count)
-            m_demandZones[i].Show();
-         else
-            m_demandZones[i].Hide();
+         ArrayResize(allZones, totalZones + 1);
+         allZones[totalZones].zone = m_demandZones[i];
+         allZones[totalZones].distance = m_demandZones[i].GetDistanceToPrice();
+         totalZones++;
       }
+   }
+   
+   // Sort all zones by distance
+   for(int i = 0; i < totalZones - 1; i++)
+   {
+      for(int j = 0; j < totalZones - i - 1; j++)
+      {
+         if(allZones[j].distance > allZones[j + 1].distance)
+         {
+            SZoneDistance temp = allZones[j];
+            allZones[j] = allZones[j + 1];
+            allZones[j + 1] = temp;
+         }
+      }
+   }
+   
+   // First hide all zones
+   for(int i = 0; i < ArraySize(m_supplyZones); i++)
+      if(m_supplyZones[i] != NULL)
+         m_supplyZones[i].Hide();
+   
+   for(int i = 0; i < ArraySize(m_demandZones); i++)
+      if(m_demandZones[i] != NULL)
+         m_demandZones[i].Hide();
+   
+   // Show only the N closest zones (combined)
+   for(int i = 0; i < MathMin(count, totalZones); i++)
+   {
+      if(allZones[i].zone != NULL)
+         allZones[i].zone.Show();
    }
 }
 
@@ -1052,6 +1507,8 @@ void CSupplyDemandManager::ShowClosestZones(int count)
 void CSupplyDemandManager::ManageZoneDisplay()
 {
    double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+   
+   Print("[ManageZoneDisplay] Mode=", m_showZones, " Supply=", ArraySize(m_supplyZones), " Demand=", ArraySize(m_demandZones));
    
    if(m_showZones == 0)
    {
