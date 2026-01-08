@@ -17,60 +17,64 @@
 
 //--- Input parameters
 input group "=== Account Information ==="
-input bool              InpEnableEvaluation = true;      // Enable Prop Firm Evaluation Mode
-input double            InpInitialBalance = 10000.0;     // Initial account balance for calculations
-input double            InpDailyLossBreachedPct = 1.0;   // Daily Loss Breached percentage
-input double            InpRiskConsistencyPct = 2.0;     // Risk Consistency Rule percentage per trade idea
-input double            InpDailyLossLimitPct = 5.0;      // Daily loss limit percentage
-input double            InpMaxLossLimitPct = 10.0;       // Maximum loss limit
+input bool              InpEnableEvaluation = true;            // Enable Prop Firm Evaluation Mode
+input bool              InpEnableLotSizeValidation = false;    // Enable Lot Size Validation (startup check)
+input double            InpInitialBalance = 10000.0;           // Initial account balance for calculations
+// Evaluation Rules Toggle
+input bool              InpEnableDLB = false;                  // Enable Daily Loss Breached Rule (DLB)
+input double            InpDailyLossBreachedPct = 1.0;         // Daily Loss Breached percentage
+input double            InpRiskConsistencyPct = 2.0;           // Risk Consistency Rule percentage per trade idea
+input double            InpDailyLossLimitPct = 5.0;            // Daily loss limit percentage
+input double            InpMaxLossLimitPct = 10.0;             // Maximum loss limit
 // Profit Sharing Rules
-input double            InpProfitTargetPct = 10.0;       // Profit Target percentage
-input double            InpProfitConsistencyPct = 20.0;  // Profit Consistency Rule percentage
+input double            InpProfitTargetPct = 10.0;             // Profit Target percentage
+input double            InpProfitConsistencyPct = 20.0;        // Profit Consistency Rule percentage
 
 input group "=== Zone Detection Settings ==="
-input int               InpLookbackBars = 500;           // Lookback Period (bars)
-input long              InpVolumeThreshold = 1000;       // Volume Threshold (0=auto calculate)
-input int               InpMinBarsInZone = 2;            // Minimum Bars in Zone
-input int               InpMaxBarsInZone = 10;           // Maximum Bars in Zone
-input double            InpMinZoneSize = 50.0;           // Minimum Zone Size (points)
-input double            InpMaxZoneSize = 1000.0;         // Maximum Zone Size (points)
-input double            InpMinPriceLeftDistance = 20.0;  // Min Distance to Consider Left (points)
+input int               InpLookbackBars = 500;                 // Lookback Period (bars)
+input long              InpVolumeThreshold = 1000;             // Volume Threshold (0=auto calculate)
+input int               InpMinBarsInZone = 2;                  // Minimum Bars in Zone
+input int               InpMaxBarsInZone = 10;                 // Maximum Bars in Zone
+input double            InpMinZoneSize = 50.0;                 // Minimum Zone Size (points)
+input double            InpMaxZoneSize = 1000.0;               // Maximum Zone Size (points)
+input double            InpMinPriceLeftDistance = 20.0;        // Min Distance to Consider Left (points)
 
 input group "=== Trading Settings ==="
-input bool              InpEnableTrading = true;         // Enable Auto Trading
-input double            InpLotSize = 0.01;               // Fixed Lot Size
-input int               InpMaxTrade = 3;                 // Maximum Concurrent Trades
-input int               InpATRPeriod = 14;               // ATR Period
-input double            InpATRMultiplierSL = 2.0;        // ATR Multiplier for SL
-input double            InpATRMultiplierTP = 3.0;        // ATR Multiplier for TP
-input int               InpMagicNumber = 123456;         // Magic Number
-input string            InpTradeComment = "SD_EA";       // Trade Comment
+input bool              InpEnableTrading = true;               // Enable Auto Trading
+input double            InpLotSize = 0.01;                     // Fixed Lot Size
+input int               InpMaxTrade = 3;                       // Maximum Concurrent Trades
+input int               InpATRPeriod = 14;                     // ATR Period
+input double            InpATRMultiplierSL = 2.0;              // ATR Multiplier for SL
+input double            InpATRMultiplierTP = 3.0;              // ATR Multiplier for TP
+input int               InpMagicNumber = 123456;               // Magic Number
+input string            InpTradeComment = "SD_EA";             // Trade Comment
 
 input group "=== Trailing Settings ==="
-input bool              InpEnableTrailingStop = false;   // Enable Trailing Stop
-input double            InpTrailingStopDistance = 50.0;  // Trailing Stop Distance (points)
-input double            InpTrailingStopStep = 10.0;      // Trailing Stop Step (points)
-input bool              InpEnableTrailingTP = false;     // Enable Trailing TP
-input double            InpTrailingTPDistance = 50.0;    // Trailing TP Distance (points)
-input double            InpTrailingTPStep = 10.0;        // Trailing TP Step (points)
+input bool              InpEnableTrailingStop = false;         // Enable Trailing Stop
+input double            InpTrailingStopDistance = 50.0;        // Trailing Stop Distance (points)
+input double            InpTrailingStopStep = 10.0;            // Trailing Stop Step (points)
+input bool              InpEnableTrailingTP = false;           // Enable Trailing TP
+input double            InpTrailingTPDistance = 50.0;          // Trailing TP Distance (points)
+input double            InpTrailingTPStep = 10.0;              // Trailing TP Step (points)
 
 input group "=== Zone Display Settings ==="
-input int               InpShowZone = -1;                // Show Zones (-1=all, 0=none, N=closest)
-input color             InpSupplyColor = clrCrimson;     // Supply Zone Color
-input color             InpDemandColor = clrDodgerBlue;  // Demand Zone Color
-input color             InpSupplyColorFill = clrMistyRose;       // Supply Fill Color
-input color             InpDemandColorFill = clrLightSteelBlue;  // Demand Fill Color
-input int               InpZoneTransparency = 85;        // Zone Transparency (0-100)
-input bool              InpShowLabels = true;            // Show Volume Labels
+input int               InpShowZone = -1;                            // Show Zones (-1=all, 0=none, N=closest)
+input color             InpSupplyColor = clrCrimson;              // Supply Zone Color
+input color             InpDemandColor = clrDodgerBlue;           // Demand Zone Color
+input color             InpSupplyColorFill = clrMistyRose;        // Supply Fill Color
+input color             InpDemandColorFill = clrLightSteelBlue;   // Demand Fill Color
+input int               InpZoneTransparency = 85;                    // Zone Transparency (0-100)
+input bool              InpShowLabels = true;                        // Show Volume Labels
 
 input group "=== Advanced Settings ==="
-input ENUM_TIMEFRAMES   InpZoneTimeframe = PERIOD_CURRENT; // Zone Detection Timeframe
-input bool              InpAutoVolumeThreshold = true;   // Auto Calculate Volume Threshold
-input double            InpVolumeMultiplier = 1.5;       // Volume Multiplier (for auto calc)
-input bool              InpUpdateOnNewBar = true;        // Update Zones on New Bar
-input int               InpUpdateIntervalSec = 300;      // Update Interval (seconds)
-input bool              InpDebugMode = false;            // Enable Debug Logging
-input bool              InpSilentLogging = false;           // Silent Logging (no console output)
+input ENUM_TIMEFRAMES   InpZoneTimeframe = PERIOD_CURRENT;     // Zone Detection Timeframe
+input bool              InpAutoVolumeThreshold = true;         // Auto Calculate Volume Threshold
+input double            InpVolumeMultiplier = 1.5;             // Volume Multiplier (for auto calc)
+input bool              InpUpdateOnNewBar = true;              // Update Zones on New Bar
+input int               InpUpdateIntervalSec = 300;            // Update Interval (seconds)
+input bool              InpDebugMode = false;                  // Enable Debug Logging
+input bool              InpSilentLogging = false;              // Silent Logging (no console output)
+
 //--- Global objects
 CSupplyDemandManager *g_SDManager = NULL;
 CTrade            g_Trade;
@@ -101,6 +105,114 @@ double g_LastEquityCheck = 0;           // Previous equity for edge detection
 //--- Profit Consistency Tracking
 double g_DailyProfits[];                // Array of daily profits (closed P/L + open loss)
 double g_TodayOpeningBalance = 0;       // Balance at start of today (for daily P/L calc)
+
+//+------------------------------------------------------------------+
+//| Validate lot size compatibility with RCR limit                   |
+//+------------------------------------------------------------------+
+bool ValidateLotSizeForRCR()
+{
+   // Skip validation if disabled by user
+   if(!InpEnableLotSizeValidation) return true;
+   
+   if(!InpEnableEvaluation || !InpEnableTrading) return true;
+   
+   // Calculate ATR manually from recent bars (more reliable at startup)
+   double atrValue = 0.0;
+   int lookback = InpATRPeriod + 10;  // Get extra bars for calculation
+   
+   double high[], low[], close[];
+   ArraySetAsSeries(high, true);
+   ArraySetAsSeries(low, true);
+   ArraySetAsSeries(close, true);
+   
+   if(CopyHigh(_Symbol, InpZoneTimeframe, 0, lookback, high) <= 0 ||
+      CopyLow(_Symbol, InpZoneTimeframe, 0, lookback, low) <= 0 ||
+      CopyClose(_Symbol, InpZoneTimeframe, 0, lookback, close) <= 0)
+   {
+      Logging("[VALIDATION] WARNING: Cannot get price data for validation - skipping");
+      return true;  // Don't block initialization
+   }
+   
+   // Calculate simple ATR estimation (average true range over period)
+   double totalTR = 0.0;
+   for(int i = 1; i < InpATRPeriod + 1; i++)
+   {
+      double tr1 = high[i] - low[i];
+      double tr2 = MathAbs(high[i] - close[i+1]);
+      double tr3 = MathAbs(low[i] - close[i+1]);
+      totalTR += MathMax(tr1, MathMax(tr2, tr3));
+   }
+   atrValue = totalTR / InpATRPeriod;
+   double slDistance = atrValue * InpATRMultiplierSL;
+   
+   // Calculate risk per trade
+   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double riskPerTrade = slDistance * InpLotSize * tickValue / tickSize;
+   
+   // Calculate maximum concurrent risk with InpMaxTrade positions
+   double maxConcurrentRisk = riskPerTrade * InpMaxTrade;
+   
+   // RCR soft limit (90% of configured limit)
+   double rcrSoftLimit = InpInitialBalance * InpRiskConsistencyPct * 0.9 / 100.0;
+   
+   // RCR hard limit (100% of configured limit)
+   double rcrHardLimit = InpInitialBalance * InpRiskConsistencyPct / 100.0;
+   
+   // Log validation results
+   Logging("===== LOT SIZE VALIDATION =====");
+   Logging("  ATR Value: " + DoubleToString(atrValue, _Digits));
+   Logging("  SL Distance: " + DoubleToString(slDistance, _Digits) + " (ATR × " + DoubleToString(InpATRMultiplierSL, 1) + ")");
+   Logging("  Risk per trade: $" + DoubleToString(riskPerTrade, 2) + " (" + DoubleToString((riskPerTrade / InpInitialBalance) * 100, 2) + "%)");
+   Logging("  Max concurrent risk: $" + DoubleToString(maxConcurrentRisk, 2) + " (" + IntegerToString(InpMaxTrade) + " trades)");
+   Logging("  RCR Soft Limit (90%): $" + DoubleToString(rcrSoftLimit, 2) + " (" + DoubleToString(InpRiskConsistencyPct * 0.9, 2) + "%)");
+   Logging("  RCR Hard Limit (100%): $" + DoubleToString(rcrHardLimit, 2) + " (" + DoubleToString(InpRiskConsistencyPct, 2) + "%)");
+   
+   // Check if single trade exceeds soft limit
+   if(riskPerTrade > rcrSoftLimit)
+   {
+      Logging("===== ⚠️ LOT SIZE TOO LARGE =====");
+      Logging("  CRITICAL: Risk per trade ($" + DoubleToString(riskPerTrade, 2) + ") exceeds RCR soft limit ($" + DoubleToString(rcrSoftLimit, 2) + ")");
+      Logging("  EA will BLOCK all trades immediately!");
+      Logging("  ");
+      Logging("  RECOMMENDED ACTIONS:");
+      double maxSafeLots = (rcrSoftLimit * tickSize) / (slDistance * tickValue);
+      Logging("    1. Reduce lot size to: " + DoubleToString(maxSafeLots, 2) + " or lower");
+      Logging("    2. Reduce ATR SL multiplier from " + DoubleToString(InpATRMultiplierSL, 1) + " to lower value");
+      Logging("    3. Increase RCR limit from " + DoubleToString(InpRiskConsistencyPct, 1) + "% to higher value");
+      Logging("================================");
+      
+      Alert("⚠️ LOT SIZE TOO LARGE! Risk $" + DoubleToString(riskPerTrade, 2) + " > RCR Limit $" + DoubleToString(rcrSoftLimit, 2) + 
+            "\nReduce lot size to " + DoubleToString(maxSafeLots, 2) + " or adjust parameters!");
+      
+      return false;
+   }
+   
+   // Check if concurrent trades might exceed hard limit
+   if(maxConcurrentRisk > rcrHardLimit)
+   {
+      Logging("===== ⚠️ CONCURRENT RISK WARNING =====");
+      Logging("  WARNING: Max concurrent risk ($" + DoubleToString(maxConcurrentRisk, 2) + ") may exceed RCR hard limit ($" + DoubleToString(rcrHardLimit, 2) + ")");
+      Logging("  EA may disable trading if all " + IntegerToString(InpMaxTrade) + " trades open simultaneously");
+      Logging("  ");
+      Logging("  SUGGESTED ACTIONS:");
+      int maxSafeTrades = (int)(rcrHardLimit / riskPerTrade);
+      Logging("    1. Reduce MaxTrade from " + IntegerToString(InpMaxTrade) + " to " + IntegerToString(maxSafeTrades) + " or lower");
+      Logging("    2. Reduce lot size for safer margin");
+      Logging("=====================================");
+      
+      // This is a warning, not a blocker - return true but inform user
+   }
+   else
+   {
+      Logging("===== ✅ LOT SIZE VALIDATION PASSED =====");
+      Logging("  Configuration is compatible with RCR limits");
+      Logging("  Single trade risk is within acceptable range");
+      Logging("=========================================");
+   }
+   
+   return true;
+}
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -235,6 +347,12 @@ int OnInit()
       Logging("  DLB %: " + DoubleToString(InpDailyLossBreachedPct, 2) + "% | RCR %: " + DoubleToString(InpRiskConsistencyPct, 2) + "%");
       
       CreateEvaluationDisplay();
+      
+      // Validate lot size compatibility with RCR limit
+      if(!ValidateLotSizeForRCR())
+      {
+         Logging("[WARNING] Lot size may be too large for RCR limit - EA may block trades immediately!");
+      }
    }
    
    Logging("Supply & Demand EA initialized successfully!");
@@ -242,7 +360,7 @@ int OnInit()
    Logging("  Zone Timeframe: " + EnumToString(InpZoneTimeframe));
    Logging("  Show zones: " + (InpShowZone == -1 ? "All" : (InpShowZone == 0 ? "None" : IntegerToString(InpShowZone) + " closest")));
    Logging("  Volume threshold: " + DoubleToString(volumeThreshold, 2));
-   Logging("  Auto Trading: " + (InpEnableTrading ? "ENABLED" : "DISABLED"));
+   Logging("  Auto Trading: " + (InpEnableTrailingStop ? "ENABLED" : "DISABLED"));
    
    return INIT_SUCCEEDED;
 }
@@ -833,7 +951,7 @@ void CheckDailyReset()
       {
          double equity = AccountInfoDouble(ACCOUNT_EQUITY);
          double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-         double dailyLoss = InpInitialBalance * InpDailyLossLimitPct / 100.0;
+         double dailyLoss = InpInitialBalance * InpDailyLossLimitPct * 0.9 / 100.0;  // Use 90% of DLL as soft limit
          
          // Calculate today's profit before reset (Total Closed P/L + Open Loss)
          // Daily profit = current balance - opening balance (closed P/L only, ignore floating)
@@ -919,27 +1037,213 @@ void CheckEvaluationLimits()
       }
    }
    
+   // Check Risk Consistency Rule at 1.5% soft limit - close violating trade ideas
+   CheckRCRSoftLimit();
+   
+   // Check Risk Consistency Rule HARD LIMIT (2%) - disable trading if exceeded
+   CheckRCRHardLimit();
+   
    // Check Daily Loss Breached (DLB) - Soft limit (check against daily starting equity/balance)
-   // Use edge detection: only count when crossing FROM above threshold TO below threshold
-   double dailyStartBase = (g_DailyStartingEquity > g_DailyStartingBalance) ? g_DailyStartingEquity : g_DailyStartingBalance;
-   double dlbThreshold = dailyStartBase * (1.0 - InpDailyLossBreachedPct / 100.0);
-   
-   // Check if we're crossing the threshold (edge detection)
-   bool wasAboveThreshold = (g_LastEquityCheck >= dlbThreshold);
-   bool isNowBelowThreshold = (equity < dlbThreshold);
-   
-   if(isNowBelowThreshold && wasAboveThreshold)
+   // Only enforce if InpEnableDLB is true
+   if(InpEnableDLB)
    {
-      g_DLBCount++;
-      CloseAllPositions("DLB Soft Breach");
-      Logging("[EVAL] *** DLB BREACHED *** Count: " + IntegerToString(g_DLBCount) + " | Equity: $" + DoubleToString(equity, _Digits) + 
-            " < DLB Threshold: $" + DoubleToString(dlbThreshold, _Digits) + " (" + DoubleToString(InpDailyLossBreachedPct, 2) + "%) | Daily Start: $" + DoubleToString(dailyStartBase, _Digits));
-      Logging("[EVAL] All positions closed. Trading continues with increased breach count.");
-      Alert("DLB BREACHED! Count: ", g_DLBCount, " Equity: $", equity);
+      // Use edge detection: only count when crossing FROM above threshold TO below threshold
+      double dailyStartBase = (g_DailyStartingEquity > g_DailyStartingBalance) ? g_DailyStartingEquity : g_DailyStartingBalance;
+      double dlbThreshold = dailyStartBase * (1.0 - InpDailyLossBreachedPct / 100.0);
+      
+      // Check if we're crossing the threshold (edge detection)
+      bool wasAboveThreshold = (g_LastEquityCheck >= dlbThreshold);
+      bool isNowBelowThreshold = (equity < dlbThreshold);
+      
+      if(isNowBelowThreshold && wasAboveThreshold)
+      {
+         CloseAllPositions("DLB Soft Breach");
+         Logging("[EVAL] *** DLB BREACHED *** Equity: $" + DoubleToString(equity, _Digits) + 
+               " < DLB Threshold: $" + DoubleToString(dlbThreshold, _Digits) + " (" + DoubleToString(InpDailyLossBreachedPct, 2) + "%) | Daily Start: $" + DoubleToString(dailyStartBase, _Digits));
+         Logging("[EVAL] All positions closed. Trading continues.");
+         Alert("DLB BREACHED! Equity: $", equity);
+      }
+      
+      // Update last equity for next check
+      g_LastEquityCheck = equity;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check RCR Soft Limit (1.5%) - Close violating trade ideas       |
+//+------------------------------------------------------------------+
+void CheckRCRSoftLimit()
+{
+   if(!InpEnableEvaluation)
+      return;
+   
+   double rcrSoftLimit = InpInitialBalance * InpRiskConsistencyPct * 0.9 / 100.0;  // 90% of RCR limit
+   
+   // Calculate risk for BUY trade idea
+   double buyRisk = 0.0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(posType != POSITION_TYPE_BUY) continue;
+      
+      double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double posSL = PositionGetDouble(POSITION_SL);
+      double posLots = PositionGetDouble(POSITION_VOLUME);
+      
+      double riskDistance = MathAbs(posOpenPrice - posSL);
+      double slRisk = riskDistance * posLots * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      
+      buyRisk += slRisk;
    }
    
-   // Update last equity for next check
-   g_LastEquityCheck = equity;
+   // Calculate risk for SELL trade idea
+   double sellRisk = 0.0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(posType != POSITION_TYPE_SELL) continue;
+      
+      double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double posSL = PositionGetDouble(POSITION_SL);
+      double posLots = PositionGetDouble(POSITION_VOLUME);
+      
+      double riskDistance = MathAbs(posOpenPrice - posSL);
+      double slRisk = riskDistance * posLots * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      
+      sellRisk += slRisk;
+   }
+   
+   // Check BUY trade idea
+   if(buyRisk > rcrSoftLimit)
+   {
+      double buyRiskPct = (buyRisk / InpInitialBalance) * 100.0;
+      Logging("[EVAL] *** RCR SOFT LIMIT BREACHED (BUY) *** Risk: $" + DoubleToString(buyRisk, 2) + 
+            " (" + DoubleToString(buyRiskPct, 2) + "%) > 90% of " + DoubleToString(InpRiskConsistencyPct, 1) + "% limit - Closing all BUY positions");
+      Alert("RCR BREACH! Closing all BUY positions to prevent evaluation failure. Risk: ", DoubleToString(buyRiskPct, 2), "%");
+      
+      // Close all BUY positions
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+         
+         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+         {
+            if(g_Trade.PositionClose(ticket))
+               Logging("[EVAL] Closed BUY position #" + IntegerToString(ticket) + " - RCR Soft Limit");
+         }
+      }
+   }
+   
+   // Check SELL trade idea
+   if(sellRisk > rcrSoftLimit)
+   {
+      double sellRiskPct = (sellRisk / InpInitialBalance) * 100.0;
+      Logging("[EVAL] *** RCR SOFT LIMIT BREACHED (SELL) *** Risk: $" + DoubleToString(sellRisk, 2) + 
+            " (" + DoubleToString(sellRiskPct, 2) + "%) > 90% of " + DoubleToString(InpRiskConsistencyPct, 1) + "% limit - Closing all SELL positions");
+      Alert("RCR BREACH! Closing all SELL positions to prevent evaluation failure. Risk: ", DoubleToString(sellRiskPct, 2), "%");
+      
+      // Close all SELL positions
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+         
+         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
+         {
+            if(g_Trade.PositionClose(ticket))
+               Logging("[EVAL] Closed SELL position #" + IntegerToString(ticket) + " - RCR Soft Limit");
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check RCR Hard Limit (2%) - Disable trading if exceeded         |
+//+------------------------------------------------------------------+
+void CheckRCRHardLimit()
+{
+   if(!InpEnableEvaluation)
+      return;
+   
+   if(g_TradingDisabled)  // Already disabled
+      return;
+   
+   double rcrHardLimit = InpInitialBalance * InpRiskConsistencyPct / 100.0;  // Full 2% limit
+   
+   // Calculate risk for BUY trade idea
+   double buyRisk = 0.0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(posType != POSITION_TYPE_BUY) continue;
+      
+      double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double posSL = PositionGetDouble(POSITION_SL);
+      double posLots = PositionGetDouble(POSITION_VOLUME);
+      
+      double riskDistance = MathAbs(posOpenPrice - posSL);
+      double slRisk = riskDistance * posLots * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      
+      buyRisk += slRisk;
+   }
+   
+   // Calculate risk for SELL trade idea
+   double sellRisk = 0.0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(posType != POSITION_TYPE_SELL) continue;
+      
+      double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double posSL = PositionGetDouble(POSITION_SL);
+      double posLots = PositionGetDouble(POSITION_VOLUME);
+      
+      double riskDistance = MathAbs(posOpenPrice - posSL);
+      double slRisk = riskDistance * posLots * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      
+      sellRisk += slRisk;
+   }
+   
+   // Check if either trade idea exceeds HARD limit
+   if(buyRisk > rcrHardLimit || sellRisk > rcrHardLimit)
+   {
+      g_TradingDisabled = true;
+      CloseAllPositions("RCR HARD LIMIT BREACHED");
+      
+      double breachedRisk = MathMax(buyRisk, sellRisk);
+      double breachedPct = (breachedRisk / InpInitialBalance) * 100.0;
+      string direction = (buyRisk > sellRisk) ? "BUY" : "SELL";
+      
+      Logging("[EVAL] *** RCR HARD LIMIT BREACHED *** Direction: " + direction + " | Risk: $" + DoubleToString(breachedRisk, 2) + 
+            " (" + DoubleToString(breachedPct, 2) + "%) >= " + DoubleToString(InpRiskConsistencyPct, 1) + "% limit");
+      Logging("[EVAL] TRADING DISABLED - Evaluation rules violated");
+      Alert("CRITICAL: RCR HARD LIMIT BREACHED! Trading DISABLED. Risk: ", DoubleToString(breachedPct, 2), "%");
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -973,14 +1277,13 @@ bool CheckRiskConsistencyRule(string symbol, ENUM_POSITION_TYPE direction, doubl
       totalRisk += posRisk;
    }
    
-   // Check against RCR percentage
-   double rcrLimit = InpInitialBalance * InpRiskConsistencyPct / 100.0;
+   // Check against RCR percentage (90% of limit as soft threshold)
+   double rcrLimit = InpInitialBalance * InpRiskConsistencyPct * 0.9 / 100.0;
    
    if(totalRisk > rcrLimit)
    {
-      g_RCRCount++;
-      Logging("[EVAL] *** RCR WOULD BE BREACHED *** Count: " + IntegerToString(g_RCRCount) + 
-            " | Total Risk: $" + DoubleToString(totalRisk, _Digits) + " > RCR Limit: $" + DoubleToString(rcrLimit, _Digits) + " (" + DoubleToString(InpRiskConsistencyPct, 2) + "%)");
+      Logging("[EVAL] *** RCR SOFT LIMIT EXCEEDED *** Total Risk: $" + DoubleToString(totalRisk, _Digits) + 
+            " > 90% RCR Limit: $" + DoubleToString(rcrLimit, _Digits) + " (" + DoubleToString(InpRiskConsistencyPct * 0.9, 2) + "%)");
       return false;
    }
    
@@ -1242,8 +1545,8 @@ void UpdateEvaluationDisplay()
    lines[4] = StringFormat("DLL: $%.2f / $%.2f (%.1f%%)", dailyRemaining, dailyLossAllowed, (dailyRemaining / dailyLossAllowed * 100.0));
    lines[5] = StringFormat("MLL: $%.2f / $%.2f (%.1f%%)", maxRemaining, maxLossAllowed, (maxRemaining / maxLossAllowed * 100.0));
    lines[6] = "─────────────────────────";
-   lines[7] = StringFormat("DLB Count: %d (%.2f%%|%.1f%%)", g_DLBCount, actualDLBPct, InpDailyLossBreachedPct);
-   lines[8] = StringFormat("RCR Count: %d (%.2f%%|%.1f%%)", g_RCRCount, maxRCRPct, InpRiskConsistencyPct);
+   lines[7] = StringFormat("DLB: %.2f%% | Limit: %.1f%%", actualDLBPct, InpDailyLossBreachedPct);
+   lines[8] = StringFormat("RCR: %.2f%% | Limit: %.1f%%", maxRCRPct, InpRiskConsistencyPct);
    lines[9] = "─────────────────────────";
    lines[10] = StringFormat("Profit Target: $%.2f / $%.2f", currentProfit, profitTarget);
    lines[11] = StringFormat("Best Day: $%.2f | Total: $%.2f", bestDayProfit, totalProfit);
