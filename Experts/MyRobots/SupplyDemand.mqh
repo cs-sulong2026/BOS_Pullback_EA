@@ -487,6 +487,7 @@ private:
    color             m_supplyColorFill;
    color             m_demandColorFill;
    bool              m_showLabels;
+   bool              m_enableTradeOnWeakZone; // Enable trading on weak (TESTED) zones
    
    // Tracking
    datetime          m_lastUpdateTime;
@@ -505,6 +506,7 @@ public:
    void              SetShowZones(int showZones) { m_showZones = showZones; }
    void              SetVisualSettings(color supplyCol, color demandCol, color supplyFill,
                                       color demandFill, int transparency, bool labels);
+   void              SetEnableTradeOnWeakZone(bool enable) { m_enableTradeOnWeakZone = enable; }
    
    // Zone detection
    bool              DetectZones();
@@ -556,6 +558,7 @@ CSupplyDemandManager::CSupplyDemandManager()
    m_supplyColorFill = clrMistyRose;
    m_demandColorFill = clrLightSteelBlue;
    m_showLabels = true;
+   m_enableTradeOnWeakZone = true; // Default enabled
    
    m_lastUpdateTime = 0;
    m_lastScannedBar = 0;  // Initialize tracking
@@ -1103,12 +1106,15 @@ void CSupplyDemandManager::UpdateAllZones()
             }
             else if(m_supplyZones[i].GetState() == SD_STATE_TESTED)
             {
-               // Weak zone - also draw entry arrow if price returns after leaving
+               // Weak zone - only trade if enabled
                // Print("[IsPriceTouching] SUPPLY[", i, "] WEAK zone return | Price=", currentPrice);
                
-               // Open SELL trade for weak supply zone
-               OpenSellTrade(m_supplyZones[i]);
-               m_supplyZones[i].SetState(SD_STATE_ACTIVE);
+               // Open SELL trade for weak supply zone (only if weak zone trading enabled)
+               if(m_enableTradeOnWeakZone)
+               {
+                  OpenSellTrade(m_supplyZones[i]);
+                  m_supplyZones[i].SetState(SD_STATE_ACTIVE);
+               }
             }
             else
             {
@@ -1231,12 +1237,15 @@ void CSupplyDemandManager::UpdateAllZones()
             }
             else if(m_demandZones[i].GetState() == SD_STATE_TESTED)
             {
-               // Weak zone - also draw entry arrow if price returns after leaving
+               // Weak zone - only trade if enabled
                // Print("[IsPriceTouching] DEMAND[", i, "] WEAK zone return | Price=", currentPrice);
                
-               // Open BUY trade for weak demand zone
-               OpenBuyTrade(m_demandZones[i]);
-               m_demandZones[i].SetState(SD_STATE_ACTIVE);
+               // Open BUY trade for weak demand zone (only if weak zone trading enabled)
+               if(m_enableTradeOnWeakZone)
+               {
+                  OpenBuyTrade(m_demandZones[i]);
+                  m_demandZones[i].SetState(SD_STATE_ACTIVE);
+               }
             }
             else
             {
