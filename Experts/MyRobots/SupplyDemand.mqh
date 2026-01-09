@@ -514,6 +514,10 @@ public:
    void              ManageZoneDisplay();
    bool              DetectNewZones(int lookbackBars = 20);  // Detect zones in recent bars only
    
+   // Price action zone detection
+   void              DetectPriceActionZones();
+   bool              AddManualZone(double top, double bottom, bool isSupply, datetime createdTime);
+   
    // Analysis
    int               GetSupplyZoneCount() const { return ArraySize(m_supplyZones); }
    int               GetDemandZoneCount() const { return ArraySize(m_demandZones); }
@@ -536,6 +540,12 @@ private:
    bool              IsZoneOverlapping(ENUM_SD_ZONE_TYPE type, double top, double bottom);
    void              SortZonesByDistance(double currentPrice);
    void              ShowClosestZones(int count);
+   
+   // Price action detection helpers
+   bool              IsPriceActionDemandZone(const MqlRates &rates[], int index);
+   bool              IsPriceActionSupplyZone(const MqlRates &rates[], int index);
+   void              CreatePriceActionZone(const MqlRates &rates[], int index, bool isSupply);
+   double            GetAverageBarSize(const MqlRates &rates[], int startIndex, int period);
 };
 
 //+------------------------------------------------------------------+
@@ -1060,7 +1070,7 @@ void CSupplyDemandManager::UpdateAllZones()
    
    int initialSupply = ArraySize(m_supplyZones);
    int initialDemand = ArraySize(m_demandZones);
-   // Print("[UpdateAllZones START] Supply=", initialSupply, " Demand=", initialDemand, " Price=", currentPrice);
+   Print("[UpdateAllZones START] Supply: " + IntegerToString(initialSupply) + " Demand: " + IntegerToString(initialDemand) + " Price: " + DoubleToString(currentPrice));
    
    // Update supply zones (backwards to safely delete)
    for(int i = ArraySize(m_supplyZones) - 1; i >= 0; i--)
@@ -1073,7 +1083,7 @@ void CSupplyDemandManager::UpdateAllZones()
          if(m_supplyZones[i].HasPriceBroken(currentPrice))
          {
             // Zone is broken - delete it
-            // Print("[HasPriceBroken] SUPPLY[", i, "] Price=", currentPrice, " > Top=", m_supplyZones[i].GetTop(), " - DELETING");
+            Print("[HasPriceBroken] SUPPLY[" + IntegerToString(i) + "] Price=" + DoubleToString(currentPrice) + " > Top=" + DoubleToString(m_supplyZones[i].GetTop()) + " - DELETING");
             delete m_supplyZones[i];
             
             // Shift array down
@@ -1092,7 +1102,7 @@ void CSupplyDemandManager::UpdateAllZones()
                if(m_supplyZones[i].GetZoneData().priceHasLeft)
                {
                   // Price returned after leaving - NOW draw entry arrow and open trade
-                  // Print("[IsPriceTouching] SUPPLY[", i, "] RETURN after leaving | Price=", currentPrice, " Bottom=", m_supplyZones[i].GetBottom(), " Top=", m_supplyZones[i].GetTop());
+                  Print("[IsPriceTouching] SUPPLY[", i, "] RETURN after leaving | Price=", currentPrice, " Bottom=", m_supplyZones[i].GetBottom(), " Top=", m_supplyZones[i].GetTop());
                   m_supplyZones[i].SetState(SD_STATE_ACTIVE);
                   
                   // Open SELL trade for supply zone
@@ -1101,13 +1111,13 @@ void CSupplyDemandManager::UpdateAllZones()
                else
                {
                   // Price still in zone from formation - wait for it to leave first
-                  // Print("[IsPriceTouching] SUPPLY[", i, "] Still in zone from formation - waiting for exit");
+                  Print("[IsPriceTouching] SUPPLY[", i, "] Still in zone from formation - waiting for exit");
                }
             }
             else if(m_supplyZones[i].GetState() == SD_STATE_TESTED)
             {
                // Weak zone - only trade if enabled
-               // Print("[IsPriceTouching] SUPPLY[", i, "] WEAK zone return | Price=", currentPrice);
+               Print("[IsPriceTouching] SUPPLY[", i, "] WEAK zone return | Price=", currentPrice);
                
                // Open SELL trade for weak supply zone (only if weak zone trading enabled)
                if(m_enableTradeOnWeakZone)
@@ -1176,8 +1186,8 @@ void CSupplyDemandManager::UpdateAllZones()
                {
                   // Mark that price has left the zone for the first time
                   m_supplyZones[i].SetPriceHasLeft(true);
-                  // Print("[UpdateAllZones] SUPPLY[", i, "] Price LEFT zone - now validated (distance=", 
-                  //       (zoneTop - currentPrice) / point, " points, required=", minDistance / point, " points)");
+                  Print("[UpdateAllZones] SUPPLY[", i, "] Price LEFT zone - now validated (distance=", 
+                        (zoneTop - currentPrice) / point, " points, required=", minDistance / point, " points)");
                }
             }
             
@@ -1204,7 +1214,7 @@ void CSupplyDemandManager::UpdateAllZones()
          if(m_demandZones[i].HasPriceBroken(currentPrice))
          {
             // Zone is broken - delete it
-            // Print("[HasPriceBroken] DEMAND[", i, "] Price=", currentPrice, " < Bottom=", m_demandZones[i].GetBottom(), " - DELETING");
+            Print("[HasPriceBroken] DEMAND[", i, "] Price=", currentPrice, " < Bottom=", m_demandZones[i].GetBottom(), " - DELETING");
             delete m_demandZones[i];
             
             // Shift array down
@@ -1223,7 +1233,7 @@ void CSupplyDemandManager::UpdateAllZones()
                if(m_demandZones[i].GetZoneData().priceHasLeft)
                {
                   // Price returned after leaving - NOW draw entry arrow and open trade
-                  // Print("[IsPriceTouching] DEMAND[", i, "] RETURN after leaving | Price=", currentPrice, " Bottom=", m_demandZones[i].GetBottom(), " Top=", m_demandZones[i].GetTop());
+                  Print("[IsPriceTouching] DEMAND[", i, "] RETURN after leaving | Price=", currentPrice, " Bottom=", m_demandZones[i].GetBottom(), " Top=", m_demandZones[i].GetTop());
                   m_demandZones[i].SetState(SD_STATE_ACTIVE);
                   
                   // Open BUY trade for demand zone
@@ -1232,13 +1242,13 @@ void CSupplyDemandManager::UpdateAllZones()
                else
                {
                   // Price still in zone from formation - wait for it to leave first
-                  // Print("[IsPriceTouching] DEMAND[", i, "] Still in zone from formation - waiting for exit");
+                  Print("[IsPriceTouching] DEMAND[", i, "] Still in zone from formation - waiting for exit");
                }
             }
             else if(m_demandZones[i].GetState() == SD_STATE_TESTED)
             {
                // Weak zone - only trade if enabled
-               // Print("[IsPriceTouching] DEMAND[", i, "] WEAK zone return | Price=", currentPrice);
+               Print("[IsPriceTouching] DEMAND[", i, "] WEAK zone return | Price=", currentPrice);
                
                // Open BUY trade for weak demand zone (only if weak zone trading enabled)
                if(m_enableTradeOnWeakZone)
@@ -1307,8 +1317,8 @@ void CSupplyDemandManager::UpdateAllZones()
                {
                   // Mark that price has left the zone for the first time
                   m_demandZones[i].SetPriceHasLeft(true);
-               //    Print("[UpdateAllZones] DEMAND[", i, "] Price LEFT zone - now validated (distance=", 
-               //          (currentPrice - zoneBottom) / point, " points, required=", minDistance / point, " points)");
+                  Print("[UpdateAllZones] DEMAND[", i, "] Price LEFT zone - now validated (distance=", 
+                        (currentPrice - zoneBottom) / point, " points, required=", minDistance / point, " points)");
                }
             }
             
@@ -1324,7 +1334,7 @@ void CSupplyDemandManager::UpdateAllZones()
       }
    }
    
-   // Print("[UpdateAllZones END] Supply=", ArraySize(m_supplyZones), " Demand=", ArraySize(m_demandZones));
+   Print("[UpdateAllZones END] Supply=", ArraySize(m_supplyZones), " Demand=", ArraySize(m_demandZones));
 }
 
 //+------------------------------------------------------------------+
@@ -1539,6 +1549,209 @@ CSupplyDemandZone* CSupplyDemandManager::GetClosestDemandZone(double price)
    }
    
    return closest;
+}
+
+//+------------------------------------------------------------------+
+//| Detect zones using price action (common practice method)         |
+//+------------------------------------------------------------------+
+void CSupplyDemandManager::DetectPriceActionZones()
+{
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   
+   int copied = CopyRates(m_symbol, m_timeframe, 0, m_lookbackBars + 50, rates);
+   if(copied <= 0)
+      return;
+   
+   int detectedSupply = 0;
+   int detectedDemand = 0;
+   
+   // Detect demand zones (support - price bounced up)
+   for(int i = 10; i < m_lookbackBars && detectedDemand < 20; i++)
+   {
+      if(IsPriceActionDemandZone(rates, i))
+      {
+         CreatePriceActionZone(rates, i, false); // false = demand zone
+         detectedDemand++;
+      }
+   }
+   
+   // Detect supply zones (resistance - price bounced down)
+   for(int i = 10; i < m_lookbackBars && detectedSupply < 20; i++)
+   {
+      if(IsPriceActionSupplyZone(rates, i))
+      {
+         CreatePriceActionZone(rates, i, true); // true = supply zone
+         detectedSupply++;
+      }
+   }
+   
+   Print("[DetectPriceActionZones] Detection complete: Supply=", detectedSupply, " Demand=", detectedDemand);
+   
+   // Draw all zones immediately
+   for(int i = 0; i < ArraySize(m_supplyZones); i++)
+   {
+      if(m_supplyZones[i] != NULL && m_supplyZones[i].IsValid())
+         m_supplyZones[i].Draw();
+   }
+   
+   for(int i = 0; i < ArraySize(m_demandZones); i++)
+   {
+      if(m_demandZones[i] != NULL && m_demandZones[i].IsValid())
+         m_demandZones[i].Draw();
+   }
+   
+   m_lastUpdateTime = TimeCurrent();
+   m_lastScannedBar = m_lookbackBars;  // Mark initial scan complete
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Check if bar represents demand zone (price action)               |
+//+------------------------------------------------------------------+
+bool CSupplyDemandManager::IsPriceActionDemandZone(const MqlRates &rates[], int index)
+{
+   if(index < 5 || index >= ArraySize(rates) - 5)
+      return false;
+   
+   // Look for price rejection from low (long lower wick or strong bounce)
+   double barRange = rates[index].high - rates[index].low;
+   if(barRange == 0) return false;
+   
+   double lowerWick = MathMin(rates[index].open, rates[index].close) - rates[index].low;
+   
+   // Check for significant lower wick (rejection) - at least 40% of bar range
+   if(lowerWick < barRange * 0.4)
+      return false;
+   
+   // Look for strong move up after this bar
+   bool strongMoveUp = false;
+   for(int i = index - 1; i >= MathMax(0, index - 5); i--)
+   {
+      if(rates[i].close > rates[index].high)
+      {
+         strongMoveUp = true;
+         break;
+      }
+   }
+   
+   if(!strongMoveUp)
+      return false;
+   
+   // Check zone isn't too wide
+   double avgBodySize = GetAverageBarSize(rates, index, 10);
+   if(barRange > avgBodySize * 4)
+      return false;
+   
+   // Ensure price hasn't returned to zone recently (fresh zone)
+   for(int i = index - 6; i >= MathMax(0, index - 20); i--)
+   {
+      if(rates[i].low <= rates[index].low)
+         return false;
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Check if bar represents supply zone (price action)               |
+//+------------------------------------------------------------------+
+bool CSupplyDemandManager::IsPriceActionSupplyZone(const MqlRates &rates[], int index)
+{
+   if(index < 5 || index >= ArraySize(rates) - 5)
+      return false;
+   
+   // Look for price rejection from high (long upper wick or strong drop)
+   double barRange = rates[index].high - rates[index].low;
+   if(barRange == 0) return false;
+   
+   double upperWick = rates[index].high - MathMax(rates[index].open, rates[index].close);
+   
+   // Check for significant upper wick (rejection) - at least 40% of bar range
+   if(upperWick < barRange * 0.4)
+      return false;
+   
+   // Look for strong move down after this bar
+   bool strongMoveDown = false;
+   for(int i = index - 1; i >= MathMax(0, index - 5); i--)
+   {
+      if(rates[i].close < rates[index].low)
+      {
+         strongMoveDown = true;
+         break;
+      }
+   }
+   
+   if(!strongMoveDown)
+      return false;
+   
+   // Check zone isn't too wide
+   double avgBodySize = GetAverageBarSize(rates, index, 10);
+   if(barRange > avgBodySize * 4)
+      return false;
+   
+   // Ensure price hasn't returned to zone recently (fresh zone)
+   for(int i = index - 6; i >= MathMax(0, index - 20); i--)
+   {
+      if(rates[i].high >= rates[index].high)
+         return false;
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Create a price action zone                                       |
+//+------------------------------------------------------------------+
+void CSupplyDemandManager::CreatePriceActionZone(const MqlRates &rates[], int index, bool isSupply)
+{
+   double top = rates[index].high;
+   double bottom = rates[index].low;
+   datetime createdTime = rates[index].time;
+   
+   // Add zone using the AddManualZone method
+   AddManualZone(top, bottom, isSupply, createdTime);
+}
+
+//+------------------------------------------------------------------+
+//| Get average bar size                                             |
+//+------------------------------------------------------------------+
+double CSupplyDemandManager::GetAverageBarSize(const MqlRates &rates[], int startIndex, int period)
+{
+   double totalSize = 0;
+   for(int i = startIndex; i < startIndex + period && i < ArraySize(rates); i++)
+   {
+      totalSize += rates[i].high - rates[i].low;
+   }
+   return totalSize / period;
+}
+
+//+------------------------------------------------------------------+
+//| Add manual zone (for price action or external zone creation)     |
+//+------------------------------------------------------------------+
+bool CSupplyDemandManager::AddManualZone(double top, double bottom, bool isSupply, datetime createdTime)
+{
+   // Validate zone size
+   double zoneSize = top - bottom;
+   if(!IsValidZoneSize(zoneSize))
+      return false;
+   
+   // Check for overlapping zones
+   ENUM_SD_ZONE_TYPE zoneType = isSupply ? SD_ZONE_SUPPLY : SD_ZONE_DEMAND;
+   if(IsZoneOverlapping(zoneType, top, bottom))
+      return false;
+   
+   // Calculate dummy volume values for price action zones
+   // Use approximate volume since it's not volume-based detection
+   long dummyVolume = 1000;  // Placeholder
+   double dummyVolumeAvg = 1000.0;
+   int bars = 1;  // Single bar zone for price action
+   
+   // Add the zone using existing methods
+   if(isSupply)
+      return AddSupplyZone(top, bottom, createdTime, dummyVolume, dummyVolumeAvg, bars);
+   else
+      return AddDemandZone(top, bottom, createdTime, dummyVolume, dummyVolumeAvg, bars);
 }
 
 //+------------------------------------------------------------------+

@@ -59,16 +59,18 @@ input double            InpTrailingTPDistance = 50.0;          // Trailing TP Di
 input double            InpTrailingTPStep = 10.0;              // Trailing TP Step (points)
 
 input group "=== Zone Display Settings ==="
-input int               InpShowZone = -1;                            // Show Zones (-1=all, 0=none, N=closest)
+input int               InpShowZone = -1;                         // Show Zones (-1=all, 0=none, N=closest)
+input int               InpMaxZones = 20;                         // Maximum zones to track
 input color             InpSupplyColor = clrCrimson;              // Supply Zone Color
 input color             InpDemandColor = clrDodgerBlue;           // Demand Zone Color
 input color             InpSupplyColorFill = clrMistyRose;        // Supply Fill Color
 input color             InpDemandColorFill = clrLightSteelBlue;   // Demand Fill Color
-input int               InpZoneTransparency = 85;                    // Zone Transparency (0-100)
-input bool              InpShowLabels = true;                        // Show Volume Labels
+input int               InpZoneTransparency = 85;                 // Zone Transparency (0-100)
+input bool              InpShowLabels = true;                     // Show Volume Labels
 
 input group "=== Advanced Settings ==="
 input ENUM_TIMEFRAMES   InpZoneTimeframe = PERIOD_CURRENT;     // Zone Detection Timeframe
+input bool              InpDetectZoneByVolume = true;          // Detect Zones by Volume
 input bool              InpAutoVolumeThreshold = true;         // Auto Calculate Volume Threshold
 input double            InpVolumeMultiplier = 1.5;             // Volume Multiplier (for auto calc)
 input bool              InpUpdateOnNewBar = true;              // Update Zones on New Bar
@@ -291,19 +293,41 @@ int OnInit()
    
    // Perform initial zone detection
    if(InpDebugMode)
-      Print("Starting initial zone detection...");
-   
-   if(!g_SDManager.DetectZones())
    {
-      Print("WARNING: Initial zone detection failed");
+      if(InpDetectZoneByVolume)
+         Print("Starting volume-based zone detection...");
+      else
+         Print("Starting price action-based zone detection...");
+   }
+   
+   if(InpDetectZoneByVolume)
+   {
+      // Use volume-based detection (original method)
+      if(!g_SDManager.DetectZones())
+      {
+         Print("WARNING: Volume-based zone detection failed");
+      }
+      else
+      {
+         g_SDManager.ManageZoneDisplay();
+         
+         if(InpDebugMode)
+         {
+            Logging("Volume-based zone detection complete:");
+            Logging("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
+            Logging("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
+         }
+      }
    }
    else
    {
+      // Use price action-based detection (common practice method)
+      g_SDManager.DetectPriceActionZones();
       g_SDManager.ManageZoneDisplay();
       
       if(InpDebugMode)
       {
-         Logging("Zone detection complete:");
+         Logging("Price action zone detection complete:");
          Logging("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
          Logging("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
       }
@@ -438,12 +462,19 @@ void OnTick()
          // if(InpDebugMode)
          //    Print("New bar detected, updating zones...");
          
-         // Detect new zones in recent bars
-         g_SDManager.DetectNewZones(20);
-         
-         // Update existing zones (check for broken/touched zones)
-         g_SDManager.UpdateAllZones();
-         g_SDManager.ManageZoneDisplay();
+         if(InpDetectZoneByVolume)
+         {
+            // Volume-based zone updates
+            g_SDManager.DetectNewZones(20);
+            g_SDManager.UpdateAllZones();
+            g_SDManager.ManageZoneDisplay();
+         }
+         else
+         {
+            // Price action-based zone updates
+            g_SDManager.DetectPriceActionZones();
+            g_SDManager.ManageZoneDisplay();
+         }
       }
    }
    
@@ -459,9 +490,18 @@ void OnTick()
    {
       g_LastUpdateTime = currentTime;
       
-      // Update all zones
-      g_SDManager.UpdateAllZones();
-      g_SDManager.ManageZoneDisplay();
+      if(InpDetectZoneByVolume)
+      {
+         // Volume-based periodic updates
+         g_SDManager.UpdateAllZones();
+         g_SDManager.ManageZoneDisplay();
+      }
+      else
+      {
+         // Price action-based periodic updates
+         g_SDManager.DetectPriceActionZones();
+         g_SDManager.ManageZoneDisplay();
+      }
       
       // if(InpDebugMode && !isNewBar)
       // {
