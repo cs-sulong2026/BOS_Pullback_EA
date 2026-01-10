@@ -12,9 +12,11 @@
 // Include the Supply & Demand classes
 #include "SupplyDemand.mqh"
 #include "FileHelper.mqh"
+#include <Charts/Chart.mqh>
 #include <Trade/Trade.mqh>
 #include <Trade/AccountInfo.mqh>
 #include <ChartObjects/ChartObjectsTxtControls.mqh>
+#include <errordescription.mqh>
 
 //--- Input parameters
 input group "=== Account Information ==="
@@ -82,6 +84,7 @@ input bool              InpDeleteFolder = false;               // Delete log fol
 
 //--- Global objects
 CSupplyDemandManager *g_SDManager = NULL;
+CChart               g_Chart;
 CTrade               g_Trade;
 CAccountInfo         account;
 CFileLogger          *loG = NULL;
@@ -116,6 +119,11 @@ double g_DailyProfits[];                // Array of daily profits (closed P/L + 
 datetime g_DailyDates[];                // Array of dates for each daily profit
 double g_TodayOpeningBalance = 0;       // Balance at start of today (for daily P/L calc)
 double g_ProfitConsistencyPct = 0.0;    // Current profit consistency percentage
+double g_HighestDLBPct = 0.0;           // Highest DLB % ever reached (for payout calculation)
+double g_LastPayoutTier = 90.0;         // Last payout tier percentage (for change detection)
+int g_TPHitCount = 0;                   // Total Take Profit hits
+int g_SLHitCount = 0;                   // Total Stop Loss hits
+datetime g_LastDealCheckTime = 0;       // Last time deals were checked
 
 //+------------------------------------------------------------------+
 //| Validate lot size compatibility with RCR limit                   |
@@ -264,11 +272,19 @@ int OnInit()
    loG.SetSilentMode(InpSilentLogging);
    loG.Info("===== Supply & Demand EA Initialization =====");
 
+   // Create chart template object
+   g_Chart.Attach(0);
+   if(!CreateCustomChart())
+   {
+      loG.Error("Failed to create custom chart template! Error '" + ErrorDescription(GetLastError()) + "'");
+      return INIT_FAILED;
+   }
+
    // Create Supply & Demand Manager
    g_SDManager = new CSupplyDemandManager();
    if(g_SDManager == NULL)
    {
-      loG.Warning("ERROR: Failed to create Supply Demand Manager");
+      loG.Error("Failed to create Supply Demand Manager! Error '" + ErrorDescription(GetLastError()) + "'");
       return INIT_FAILED;
    }
    
@@ -286,7 +302,7 @@ int OnInit()
                               volumeThreshold, InpMinBarsInZone, InpMaxBarsInZone,
                               InpMinZoneSize, InpMaxZoneSize, InpMinPriceLeftDistance))
    {
-      Print("ERROR: Failed to initialize Supply Demand Manager");
+      loG.Error("Failed to initialize Supply Demand Manager! Error '" + ErrorDescription(GetLastError()) + "'");
       delete g_SDManager;
       g_SDManager = NULL;
       return INIT_FAILED;
@@ -306,12 +322,13 @@ int OnInit()
       g_Trade.SetDeviationInPoints(10);
       g_Trade.SetTypeFilling(ORDER_FILLING_FOK);
       g_Trade.SetAsyncMode(false);
+      g_Trade.LogLevel(-1);  // Disable trade logging
       
       // Create ATR indicator
       g_ATRHandle = iATR(_Symbol, InpZoneTimeframe, InpATRPeriod);
       if(g_ATRHandle == INVALID_HANDLE)
       {
-         Print("ERROR: Failed to create ATR indicator");
+         loG.Error("Failed to create ATR indicator! Error '" + ErrorDescription(GetLastError()) + "'");
          delete g_SDManager;
          g_SDManager = NULL;
          return INIT_FAILED;
@@ -473,6 +490,7 @@ void OnTick()
    // Evaluation checks
    if(InpEnableEvaluation)
    {
+      CheckTPSLHits();
       CheckEvaluationLimits();
       UpdateEvaluationDisplay();
    }
@@ -918,8 +936,8 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    
    if(g_Trade.Buy(InpLotSize, _Symbol, price, sl, tp, comment))
    {
-      loG.Info("  🟢 BUY order opened: Ticket: " + IntegerToString(g_Trade.ResultOrder()) + 
-            " Entry: " + DoubleToString(price, _Digits) + " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
+      // loG.Info("  🟢 BUY order opened: Ticket: " + IntegerToString(g_Trade.ResultOrder()) + 
+      //       " Entry: " + DoubleToString(price, _Digits) + " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
       return true;
    }
    else
@@ -978,8 +996,8 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    
    if(g_Trade.Sell(InpLotSize, _Symbol, price, sl, tp, comment))
    {
-      loG.Info("  🔴 SELL order opened: Ticket: " + IntegerToString(g_Trade.ResultOrder()) +
-            " Entry: " + DoubleToString(price, _Digits) + " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
+      // loG.Info("  🔴 SELL order opened: Ticket: " + IntegerToString(g_Trade.ResultOrder()) +
+      //       " Entry: " + DoubleToString(price, _Digits) + " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
       return true;
    }
    else
@@ -1033,6 +1051,22 @@ void CheckDailyReset()
       g_DailyDates[arraySize] = TimeCurrent();
       
       Logging("Daily Profit Recorded: $" + DoubleToString(todayProfit, 2) + " (Day " + IntegerToString(arraySize + 1) + " - " + CFileHelper::GetDateString(TimeCurrent()) + ")");
+      
+      // Calculate updated Profit Consistency with new daily profit
+      double totalProfit = 0.0;
+      double bestDayProfit = 0.0;
+      int profitDays = ArraySize(g_DailyProfits);
+      
+      for(int i = 0; i < profitDays; i++)
+      {
+         totalProfit += g_DailyProfits[i];
+         if(g_DailyProfits[i] > bestDayProfit)
+            bestDayProfit = g_DailyProfits[i];
+      }
+      
+      g_ProfitConsistencyPct = 0.0;
+      if(totalProfit > 0)
+         g_ProfitConsistencyPct = MathMin((bestDayProfit / totalProfit) * 100.0, 100.0);
       
       // Save current equity and balance as new daily starting values
       g_DailyStartingEquity = equity;
@@ -1122,29 +1156,36 @@ void CheckEvaluationLimits()
    // Check Profit Sharing Rule - Qualify for payout
    CheckProfitSharingRule();
    
-   // Check Daily Loss Breached (DLB) - Soft limit (check against daily starting equity/balance)
-   // DLB applies when Profit Consistency Rule is disabled
-   if(!InpEnableProfitConsistencyRule)
+   // Track TP/SL hits
+   CheckTPSLHits();
+   
+   // Track Daily Loss Breached (DLB) for payout calculation (accumulates worst loss, resets daily)
+   // DLB tracking runs regardless of which evaluation method is active
+   double dailyStartBase = MathMax(g_DailyStartingEquity, g_DailyStartingBalance);
+   double currentBase = MathMax(equity, balance);
+   double dailyLoss = dailyStartBase - currentBase;
+   double currentDLBPct = 0.0;
+   
+   if(dailyLoss > 0 && dailyStartBase > 0)
+      currentDLBPct = (dailyLoss / dailyStartBase) * 100.0;
+   
+   // Track highest DLB percentage reached (for payout tier calculation)
+   if(currentDLBPct > g_HighestDLBPct)
    {
-      // Use edge detection: only count when crossing FROM above threshold TO below threshold
-      double dailyStartBase = (g_DailyStartingEquity > g_DailyStartingBalance) ? g_DailyStartingEquity : g_DailyStartingBalance;
-      double dlbThreshold = dailyStartBase * (1.0 - InpDailyLossBreachedPct / 100.0);
+      g_HighestDLBPct = currentDLBPct;
       
-      // Check if we're crossing the threshold (edge detection)
-      bool wasAboveThreshold = (g_LastEquityCheck >= dlbThreshold);
-      bool isNowBelowThreshold = (equity < dlbThreshold);
+      // Calculate new payout tier
+      double newPayoutTier = 90.0;
+      if(g_HighestDLBPct >= 2.0) newPayoutTier = 20.0;
+      else if(g_HighestDLBPct >= 1.5) newPayoutTier = 30.0;
+      else if(g_HighestDLBPct >= 1.0) newPayoutTier = 50.0;
       
-      if(isNowBelowThreshold && wasAboveThreshold)
+      // Only log when payout tier changes
+      if(newPayoutTier != g_LastPayoutTier)
       {
-         CloseAllPositions("DLB Soft Breach");
-         loG.Critical("*** DLB BREACHED *** Equity: $" + DoubleToString(equity, _Digits) + 
-               " < DLB Threshold: $" + DoubleToString(dlbThreshold, _Digits) + " (" + DoubleToString(InpDailyLossBreachedPct, 2) + "%) | Daily Start: $" + DoubleToString(dailyStartBase, _Digits));
-         loG.Info("All positions closed!");
-         Alert("DLB BREACHED! Equity: $", equity);
+         g_LastPayoutTier = newPayoutTier;
+         loG.Info("[DLB] Payout tier changed: " + DoubleToString(g_HighestDLBPct, 2) + "% → " + DoubleToString(newPayoutTier, 0) + "% profit sharing (Daily Loss: $" + DoubleToString(dailyLoss, 2) + ")");
       }
-      
-      // Update last equity for next check
-      g_LastEquityCheck = equity;
    }
 }
 
@@ -1362,14 +1403,10 @@ void CheckProfitSharingRule()
       }
    }
    
-   // Calculate current DLB percentage (for payout calculation)
+   // Use highest DLB percentage ever reached for payout tier calculation
+   // (g_HighestDLBPct is tracked continuously and accumulates worst loss)
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double dailyStartBase = MathMax(g_DailyStartingEquity, g_DailyStartingBalance);
-   double currentBase = MathMax(equity, balance);
-   double dailyLoss = dailyStartBase - currentBase;
-   double actualDLBPct = 0.0;
-   if(dailyLoss > 0 && dailyStartBase > 0)
-      actualDLBPct = dailyLoss / dailyStartBase * 100.0;
+   double actualDLBPct = g_HighestDLBPct;
    
    // Determine payout percentage based on evaluation method
    double payoutPct = 0.0;
@@ -1383,14 +1420,14 @@ void CheckProfitSharingRule()
       {
          // < 20% = 90% profit sharing
          payoutPct = 90.0;
-         qualificationMethod = "Profit Consistency Rule (< 20%)";
+         qualificationMethod = DoubleToString(InpProfitConsistencyPct, 0) +  "% Profit Consistency Rule";
          qualified = true;
       }
       else if(g_ProfitConsistencyPct >= 20.0 && g_ProfitConsistencyPct < 30.0 && totalProfit > 0)
       {
          // 20% - 30% = 10% profit sharing
          payoutPct = 10.0;
-         qualificationMethod = "Profit Consistency Rule (20% - 30%)";
+         qualificationMethod = DoubleToString(InpProfitConsistencyPct, 0) +  "% Profit Consistency Rule";
          qualified = true;
       }
    }
@@ -1440,7 +1477,7 @@ void CheckProfitSharingRule()
       
       if(InpEnableProfitConsistencyRule)
       {
-         loG.Info("         Profit Consistency: " + DoubleToString(g_ProfitConsistencyPct, 2) + "% < " + DoubleToString(InpProfitConsistencyPct, 1) + "% (PASSED)");
+         loG.Info("         Profit Consistency: " + DoubleToString(g_ProfitConsistencyPct, 2) + "% < " + DoubleToString(InpProfitConsistencyPct, 0) + "% (PASSED)");
       }
       else
       {
@@ -1448,10 +1485,21 @@ void CheckProfitSharingRule()
       }
       
       loG.Info("         Best Day Profit: $" + DoubleToString(bestDayProfit, 2) + " on " + (bestDayDate > 0 ? CFileHelper::GetDateString(bestDayDate) : "Unknown"));
-      loG.Info("         Total Profit: $" + DoubleToString(totalProfit, 2));
+      loG.Info("         Total Profit: $" + DoubleToString(currentProfit, 2));
       loG.Info("         Trading Days: " + IntegerToString(profitDays));
+      loG.Info("         Take Profit Hits: " + IntegerToString(g_TPHitCount) + " | Stop Loss Hits: " + IntegerToString(g_SLHitCount));
+      loG.Info("         Win Rate: " + DoubleToString((g_TPHitCount + g_SLHitCount > 0 ? (g_TPHitCount * 100.0 / (g_TPHitCount + g_SLHitCount)) : 0.0), 2) + "%");
       loG.Info("         Payout Percentage: " + DoubleToString(payoutPct, 0) + "%");
       loG.Info("         Amount Eligible for Withdrawal: $" + DoubleToString(payoutAmount, 2));
+      loG.Info("");
+      loG.Info("         ┌─────────────────────┬──────────────────┬─────────────────────────┐");
+      loG.Info("         │   Payout Tier       │  Profit Share %  │   Withdrawal Amount     │");
+      loG.Info("         ├─────────────────────┼──────────────────┼─────────────────────────┤");
+      loG.Info(StringFormat("         │   1st Payout        │       50%%        │   $%-20.2f│", currentProfit * 0.50));
+      loG.Info(StringFormat("         │   2nd Payout        │       75%%        │   $%-20.2f│", currentProfit * 0.75));
+      loG.Info(StringFormat("         │   From 3rd Payout   │       90%%        │   $%-20.2f│", currentProfit * 0.90));
+      loG.Info("         └─────────────────────┴──────────────────┴─────────────────────────┘");
+      loG.Info("");
       loG.Info("         Ready for payout withdrawal!");
       loG.Info("\n");
       
@@ -1506,6 +1554,57 @@ bool CheckRiskConsistencyRule(string symbol, ENUM_POSITION_TYPE direction, doubl
 }
 
 //+------------------------------------------------------------------+
+//| Check TP/SL Hits from Deal History                              |
+//+------------------------------------------------------------------+
+void CheckTPSLHits()
+{
+   if(!InpEnableEvaluation)
+      return;
+   
+   // Check deals since last check
+   datetime currentTime = TimeCurrent();
+   if(currentTime == g_LastDealCheckTime)
+      return;
+   
+   HistorySelect(g_LastDealCheckTime, currentTime);
+   
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      
+      // Only count our EA's deals
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      
+      // Only count exit deals
+      ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry != DEAL_ENTRY_OUT) continue;
+      
+      // Get deal profit
+      double dealProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+      double dealSwap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+      double dealCommission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+      double netProfit = dealProfit + dealSwap + dealCommission;
+      
+      // Classify as TP or SL based on net profit
+      if(netProfit > 0)
+      {
+         g_TPHitCount++;
+         loG.Debug("[TP Hit] Deal #" + IntegerToString(dealTicket) + " | Profit: $" + DoubleToString(netProfit, 2));
+      }
+      else if(netProfit < 0)
+      {
+         g_SLHitCount++;
+         loG.Debug("[SL Hit] Deal #" + IntegerToString(dealTicket) + " | Loss: $" + DoubleToString(netProfit, 2));
+      }
+   }
+   
+   g_LastDealCheckTime = currentTime;
+}
+
+//+------------------------------------------------------------------+
 //| Close all positions with reason                                  |
 //+------------------------------------------------------------------+
 void CloseAllPositions(string reason)
@@ -1557,8 +1656,8 @@ bool SaveDailyData()
       return false;
    }
    
-   // Write data version (updated to v3 for date tracking)
-   int version = 3;
+   // Write data version (updated to v4 for TP/SL tracking)
+   int version = 4;
    FileWriteInteger(handle, version, INT_VALUE);
    
    // Write daily snapshot data
@@ -1576,6 +1675,11 @@ bool SaveDailyData()
    }
    
    FileWriteDouble(handle, g_TodayOpeningBalance);
+   
+   // Write TP/SL tracking data (version 4+)
+   FileWriteInteger(handle, g_TPHitCount, INT_VALUE);
+   FileWriteInteger(handle, g_SLHitCount, INT_VALUE);
+   FileWriteLong(handle, g_LastDealCheckTime);
    
    FileClose(handle);
    return true;
@@ -1602,7 +1706,7 @@ bool LoadDailyData()
       loG.Error("Failed to open file for reading: " + workFolder + g_FileName + " Error: " + IntegerToString(GetLastError()));
    // Read data version
    int version = FileReadInteger(handle, INT_VALUE);
-   if(version < 1 || version > 3)
+   if(version < 1 || version > 4)
    {
       loG.Warning("Unsupported data file version: " + IntegerToString(version));
       FileClose(handle);
@@ -1633,6 +1737,21 @@ bool LoadDailyData()
       }
       
       g_TodayOpeningBalance = FileReadDouble(handle);
+      
+      // Read TP/SL tracking data (version 4+)
+      if(version >= 4)
+      {
+         g_TPHitCount = FileReadInteger(handle, INT_VALUE);
+         g_SLHitCount = FileReadInteger(handle, INT_VALUE);
+         g_LastDealCheckTime = (datetime)FileReadLong(handle);
+      }
+      else
+      {
+         // Initialize TP/SL counters for older versions
+         g_TPHitCount = 0;
+         g_SLHitCount = 0;
+         g_LastDealCheckTime = TimeCurrent() - 86400; // Start from yesterday
+      }
    }
    else
    {
@@ -1640,6 +1759,9 @@ bool LoadDailyData()
       ArrayResize(g_DailyProfits, 0);
       ArrayResize(g_DailyDates, 0);
       g_TodayOpeningBalance = g_DailyStartingBalance;
+      g_TPHitCount = 0;
+      g_SLHitCount = 0;
+      g_LastDealCheckTime = TimeCurrent() - 86400;
    }
    
    FileClose(handle);
@@ -1774,7 +1896,7 @@ void CreateEvaluationDisplay()
 
       g_label[i].Create(0, labelName, 0, xOffset[i], yOffset[i] * dy + sy);
       g_label[i].Description("");
-      g_label[i].Color(clrDarkGray);
+      g_label[i].Color(C'210,210,210');
       g_label[i].FontSize(9);
       g_label[i].Font("Microsoft Sans Serif");
       g_label[i].Corner(CORNER_LEFT_LOWER);
@@ -1803,16 +1925,9 @@ void UpdateEvaluationDisplay()
    double dailyRemaining = equity - g_DailyLossThreshold;
    double maxRemaining = equity - g_MaxLossThreshold;
    
-   // Calculate actual DLB percentage (based on daily starting equity/balance)
-   // Only count losses from closed positions and balance changes, NOT floating unrealized losses
-   double dailyStartBase = MathMax(g_DailyStartingEquity, g_DailyStartingBalance);
-   double currentBase = MathMax(equity, balance); // Use the higher of equity or balance
-   double dailyLoss = dailyStartBase - currentBase;
-   
-   // If in profit, stick at 0%
-   double actualDLBPct = 0.0;
-   if(dailyLoss > 0 && dailyStartBase > 0)
-      actualDLBPct = dailyLoss / dailyStartBase * 100.0;
+   // Use highest DLB percentage ever reached (for payout tier calculation)
+   // (g_HighestDLBPct is tracked continuously and accumulates worst loss)
+   double actualDLBPct = g_HighestDLBPct;
    
    // Calculate actual RCR percentage (highest risk from any trade idea)
    double maxRCRPct = 0.0;
@@ -1922,4 +2037,43 @@ void UpdateEvaluationDisplay()
    g_label[9].Description(StringFormat("Best Day: $%.2f (%s)", bestDayProfit, bestDayDate > 0 ? CFileHelper::GetDateString(bestDayDate) : "N/A"));
    g_label[10].Description(StringFormat("Profit Consistency: %.1f%% %s %.0f%%", profitConsistencyPct, InpEnableProfitConsistencyRule ? "<" : "(Not Used)", InpProfitConsistencyPct));
    g_label[11].Description(StringFormat("Total Days: %d | Profit: $%.2f", profitDays, totalProfit));
+}
+
+//+------------------------------------------------------------------+
+//| Create custom chart template for evaluation display              |
+//+------------------------------------------------------------------+
+bool CreateCustomChart()
+{
+   ResetLastError();
+
+   if(!g_Chart.ScaleFix(true))
+      return false;
+   else if(!g_Chart.ShowLineAsk(true))
+      return false;
+   else if(!g_Chart.ShowPeriodSep(true))
+      return false;
+   else if(!g_Chart.ColorBackground(C'25,25,25'))
+      return false;
+   else if(!g_Chart.ColorForeground(C'105,105,105'))
+      return false;
+   else if(!g_Chart.ColorGrid(C'50,50,50'))
+      return false;
+   else if(!g_Chart.ColorBarUp(clrDeepSkyBlue))
+      return false;
+   else if(!g_Chart.ColorBarDown(C'210,210,210'))
+      return false;
+   else if(!g_Chart.ColorCandleBull(clrTurquoise))
+      return false;
+   else if(!g_Chart.ColorCandleBear(clrMediumOrchid))
+      return false;
+   else if(!g_Chart.ColorLineBid(clrLightSlateGray))
+      return false;
+   else if(!g_Chart.ColorLineAsk(clrBrown))
+      return false;
+   else if(!g_Chart.ColorLineLast(C'0,192,0'))
+      return false;
+   else if(!g_Chart.ColorStopLevels(clrBrown))
+      return false;
+
+   return true;
 }

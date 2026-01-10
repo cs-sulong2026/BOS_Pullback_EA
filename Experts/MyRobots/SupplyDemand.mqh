@@ -27,6 +27,13 @@ enum ENUM_SD_ZONE_STATE
    SD_STATE_ACTIVE      // Zone is currently being tested
 };
 
+enum ENUM_ACCOUNT_PACKAGE
+{
+   ACCOUNT_PACKAGE_51010,        //51010 Packages
+   ACCOUNT_PACKAGE_510Zero,      //510Zero Packages
+   ACCOUNT_PACKAGE_51010_NoPC    //51010 NoPC Packages
+};
+
 //--- Structures
 struct SSupplyDemandZone
 {
@@ -67,6 +74,7 @@ private:
    color             m_supplyColorFill;
    color             m_demandColorFill;
    bool              m_showLabels;
+   int               m_transparency;
 
 public:
                      CSupplyDemandZone();
@@ -200,7 +208,7 @@ void CSupplyDemandZone::SetVisualSettings(color supplyCol, color demandCol, colo
    m_supplyColorFill = supplyFill;
    m_demandColorFill = demandFill;
    m_showLabels = labels;
-   // Note: transparency parameter ignored - transparency is now state-based
+   m_transparency = transparency;
 }
 
 //+------------------------------------------------------------------+
@@ -418,8 +426,7 @@ void CSupplyDemandZone::Update()
       color fillColor = GetZoneColor(true);
       
       // Set transparency based on zone validity and state
-      uchar transparency=0x55; // 0x55 means 55/255=21.6 % of transparency 
-      
+      int transparency = 0;
       if(m_zone.state == SD_STATE_UNTESTED)
       {
          // Strongest zones - most opaque (low transparency)
@@ -446,8 +453,14 @@ void CSupplyDemandZone::Update()
          transparency = 70;
       }
       
+      // Calculate alpha from transparency percentage
+      uchar alpha = (uchar)(255 * (100 - transparency) / 100);
+      
+      // Apply alpha channel to fill color
+      color fillColorWithAlpha = (color)((alpha << 24) | (fillColor & 0xFFFFFF));
+      
       ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_COLOR, borderColor);
-      ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_BGCOLOR, fillColor);
+      ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_BGCOLOR, fillColorWithAlpha);
       
       // Update border width - thicker for untested zones
       int borderWidth = (m_zone.state == SD_STATE_UNTESTED) ? 2 : 1;
@@ -909,7 +922,7 @@ bool CSupplyDemandManager::AddSupplyZone(int index, double top, double bottom, d
       return false;
    }
 
-   Print("New SUPPLY detected at Zone ", zoneIndex +1);
+   // Print("New SUPPLY detected at Zone ", zoneIndex +1);
    
    zone.SetVisualSettings(m_supplyColor, m_demandColor, m_supplyColorFill, m_demandColorFill,
                          0, m_showLabels);  // transparency ignored
@@ -946,7 +959,7 @@ bool CSupplyDemandManager::AddDemandZone(int index, double top, double bottom, d
       return false;
    }
 
-   Print("New DEMAND detected at Zone ", zoneIndex +1);
+   // Print("New DEMAND detected at Zone ", zoneIndex +1);
    
    zone.SetVisualSettings(m_supplyColor, m_demandColor, m_supplyColorFill, m_demandColorFill,
                          0, m_showLabels);  // transparency ignored
@@ -1122,7 +1135,7 @@ void CSupplyDemandManager::UpdateAllZones()
          if(m_supplyZones[i].HasPriceBroken(currentPrice))
          {
             // Zone is broken - delete it
-            Print("[HasPriceBroken] SUPPLY " + IntegerToString(i+1) + " - DELETING");
+            // Print("[HasPriceBroken] SUPPLY " + IntegerToString(i+1) + " - DELETING");
             delete m_supplyZones[i];
             
             // Shift array down
@@ -1141,7 +1154,7 @@ void CSupplyDemandManager::UpdateAllZones()
                if(m_supplyZones[i].GetZoneData().priceHasLeft)
                {
                   // Price returned after leaving - NOW draw entry arrow and open trade
-                  Print("[IsPriceTouching] SUPPLY ", i+1, " RETURN after leaving | Price=", currentPrice, " Bottom=", m_supplyZones[i].GetBottom(), " Top=", m_supplyZones[i].GetTop());
+                  // Print("[IsPriceTouching] SUPPLY ", i+1, " RETURN after leaving | Price=", currentPrice, " Bottom=", m_supplyZones[i].GetBottom(), " Top=", m_supplyZones[i].GetTop());
                   
                   // Open SELL trade for supply zone
                   OpenSellTrade(m_supplyZones[i]);
@@ -1151,13 +1164,13 @@ void CSupplyDemandManager::UpdateAllZones()
                else
                {
                   // Price still in zone from formation - wait for it to leave first
-                  Print("[IsPriceTouching] SUPPLY ", i+1, " Still in zone from formation - waiting for exit");
+                  // Print("[IsPriceTouching] SUPPLY ", i+1, " Still in zone from formation - waiting for exit");
                }
             }
             else if(m_supplyZones[i].GetState() == SD_STATE_TESTED)
             {
                // Weak zone - only trade if enabled
-               Print("[IsPriceTouching] SUPPLY ", i+1, " WEAK zone return | Price=", currentPrice);
+               // Print("[IsPriceTouching] SUPPLY ", i+1, " WEAK zone return | Price=", currentPrice);
                
                // Open SELL trade for weak supply zone (only if weak zone trading enabled)
                if(m_enableTradeOnWeakZone)
@@ -1226,8 +1239,8 @@ void CSupplyDemandManager::UpdateAllZones()
                {
                   // Mark that price has left the zone for the first time
                   m_supplyZones[i].SetPriceHasLeft(true);
-                  Print("[UpdateAllZones] SUPPLY ", i+1, " Price LEFT zone - now validated (distance: ", 
-                        DoubleToString(((zoneTop - currentPrice) / point), 0), " points, required: ", DoubleToString((minDistance / point), 0), " points)");
+                  // Print("[UpdateAllZones] SUPPLY ", i+1, " Price LEFT zone - now validated (distance: ", 
+                  //      DoubleToString(((zoneTop - currentPrice) / point), 0), " points, required: ", DoubleToString((minDistance / point), 0), " points)");
                }
             }
             
@@ -1257,7 +1270,7 @@ void CSupplyDemandManager::UpdateAllZones()
          if(m_demandZones[i].HasPriceBroken(currentPrice))
          {
             // Zone is broken - delete it
-            Print("[HasPriceBroken] DEMAND ", i+1, " - DELETING");
+            // Print("[HasPriceBroken] DEMAND ", i+1, " - DELETING");
             delete m_demandZones[i];
             
             // Shift array down
@@ -1276,7 +1289,7 @@ void CSupplyDemandManager::UpdateAllZones()
                if(m_demandZones[i].GetZoneData().priceHasLeft)
                {
                   // Price returned after leaving - NOW draw entry arrow and open trade
-                  Print("[IsPriceTouching] DEMAND ", i+1, " RETURN after leaving | Price=", currentPrice, " Bottom=", m_demandZones[i].GetBottom(), " Top=", m_demandZones[i].GetTop());
+                  // Print("[IsPriceTouching] DEMAND ", i+1, " RETURN after leaving | Price=", currentPrice, " Bottom=", m_demandZones[i].GetBottom(), " Top=", m_demandZones[i].GetTop());
                   
                   // Open BUY trade for demand zone
                   OpenBuyTrade(m_demandZones[i]);
@@ -1286,13 +1299,13 @@ void CSupplyDemandManager::UpdateAllZones()
                else
                {
                   // Price still in zone from formation - wait for it to leave first
-                  Print("[IsPriceTouching] DEMAND ", i+1, " Still in zone from formation - waiting for exit");
+                  // Print("[IsPriceTouching] DEMAND ", i+1, " Still in zone from formation - waiting for exit");
                }
             }
             else if(m_demandZones[i].GetState() == SD_STATE_TESTED)
             {
                // Weak zone - only trade if enabled
-               Print("[IsPriceTouching] DEMAND ", i+1, " WEAK zone return | Price=", currentPrice);
+               // Print("[IsPriceTouching] DEMAND ", i+1, " WEAK zone return | Price=", currentPrice);
                
                // Open BUY trade for weak demand zone (only if weak zone trading enabled)
                if(m_enableTradeOnWeakZone)
@@ -1361,8 +1374,8 @@ void CSupplyDemandManager::UpdateAllZones()
                {
                   // Mark that price has left the zone for the first time
                   m_demandZones[i].SetPriceHasLeft(true);
-                  Print("[UpdateAllZones] DEMAND ", i+1, " Price LEFT zone - now validated (distance: ", 
-                        DoubleToString(((currentPrice - zoneBottom) / point), 0), " points, required: ", DoubleToString((minDistance / point), 0), " points)");
+                  // Print("[UpdateAllZones] DEMAND ", i+1, " Price LEFT zone - now validated (distance: ", 
+                  //      DoubleToString(((currentPrice - zoneBottom) / point), 0), " points, required: ", DoubleToString((minDistance / point), 0), " points)");
                }
             }
             
