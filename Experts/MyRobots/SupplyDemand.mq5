@@ -11,9 +11,10 @@
 
 // Include the Supply & Demand classes
 #include "SupplyDemand.mqh"
-#include "FileNLogger.mqh"
+#include "FileHelper.mqh"
 #include <Trade/Trade.mqh>
 #include <Trade/AccountInfo.mqh>
+#include <ChartObjects/ChartObjectsTxtControls.mqh>
 
 //--- Input parameters
 input group "=== Account Information ==="
@@ -21,8 +22,8 @@ input bool              InpEnableEvaluation = true;            // Enable Prop Fi
 input bool              InpEnableLotSizeValidation = false;    // Enable Lot Size Validation (startup check)
 input double            InpInitialBalance = 10000.0;           // Initial account balance for calculations
 // Evaluation Rules Toggle
-input bool              InpEnableDLB = false;                  // Enable Daily Loss Breached Rule (DLB)
-input double            InpDailyLossBreachedPct = 1.0;         // Daily Loss Breached percentage
+input bool              InpEnableProfitConsistencyRule = true; // Enable Profit Consistency Rule (if disabled, DLB applies automatically)
+input double            InpDailyLossBreachedPct = 1.0;         // Daily Loss Breached percentage (for payout calculation)
 input double            InpRiskConsistencyPct = 2.0;           // Risk Consistency Rule percentage per trade idea
 input double            InpDailyLossLimitPct = 5.0;            // Daily loss limit percentage
 input double            InpMaxLossLimitPct = 10.0;             // Maximum loss limit
@@ -77,11 +78,14 @@ input bool              InpUpdateOnNewBar = true;              // Update Zones o
 input int               InpUpdateIntervalSec = 300;            // Update Interval (seconds)
 input bool              InpDebugMode = false;                  // Enable Debug Logging
 input bool              InpSilentLogging = false;              // Silent Logging (no console output)
+input bool              InpDeleteFolder = false;               // Delete log folder on EA removal (Temporary)
 
 //--- Global objects
 CSupplyDemandManager *g_SDManager = NULL;
-CTrade            g_Trade;
-CAccountInfo      account;
+CTrade               g_Trade;
+CAccountInfo         account;
+CFileLogger          *loG = NULL;
+CChartObjectLabel    g_label[12];
 
 //--- Global indicators
 int g_ATRHandle = INVALID_HANDLE;
@@ -92,6 +96,7 @@ datetime g_LastUpdateTime = 0;
 bool     g_DailyTimerSet = false;
 
 //--- Evaluation tracking
+int   acc_login = 0;                    // Account login (set in OnInit)
 double g_DailyLossThreshold = 0;        // DLL threshold value (resets daily)
 double g_MaxLossThreshold = 0;          // MLL threshold value (permanent)
 int g_DLBCount = 0;                     // Daily Loss Breach counter
@@ -99,7 +104,7 @@ int g_RCRCount = 0;                     // Risk Consistency Rule breach counter
 bool g_TradingDisabled = false;         // Trading disabled flag
 datetime g_LastResetTime = 0;           // Last daily reset time
 string g_DisplayLabel = "SD_Eval";      // Chart label name
-string g_FileName = "\\SnD_Data_"+IntegerToString(acc_login)+".dat";
+string g_FileName = "";                 // Data file name (set in OnInit)
 
 //--- Daily snapshot tracking
 double g_DailyStartingEquity = 0;       // Starting equity for the day
@@ -108,6 +113,7 @@ double g_LastEquityCheck = 0;           // Previous equity for edge detection
 
 //--- Profit Consistency Tracking
 double g_DailyProfits[];                // Array of daily profits (closed P/L + open loss)
+datetime g_DailyDates[];                // Array of dates for each daily profit
 double g_TodayOpeningBalance = 0;       // Balance at start of today (for daily P/L calc)
 double g_ProfitConsistencyPct = 0.0;    // Current profit consistency percentage
 
@@ -220,25 +226,49 @@ bool ValidateLotSizeForRCR()
 }
 
 //+------------------------------------------------------------------+
+//| Logging wrapper function (for compatibility)                     |
+//+------------------------------------------------------------------+
+void Logging(string message)
+{
+   if(loG != NULL)
+      loG.Log(message);
+   else
+      Print(message);
+}
+
+//+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
    // Initialize logging
-   log_file = INVALID_HANDLE;
+   loG = new CFileLogger();
+   if(loG == NULL)
+   {
+      Print("ERROR: Failed to create logger");
+      return INIT_FAILED;
+   }
+   
    acc_login = (int)account.Login();
-   expert_folder = "SnD_Logs";
-   work_folder = expert_folder+"\\"+CurrentAccountInfo(account.Server())+"_"+IntegerToString(acc_login);
-   log_fileName = "\\SnD_"+RemoveDots(TimeToString(DateToString(), TIME_DATE))+".log";
-   common_folder = false;
-   log_enabled = InpDebugMode;
-   silent_log = InpSilentLogging;
+   g_FileName = "\\SnD_Data_" + IntegerToString(acc_login) + ".dat";
+   
+   if(!loG.Initialize("SnD_Logs", "SnD", acc_login, account.Server(), false))
+   {
+      Print("ERROR: Failed to initialize logger");
+      delete loG;
+      loG = NULL;
+      return INIT_FAILED;
+   }
+   
+   loG.SetEnabled(InpDebugMode);
+   loG.SetSilentMode(InpSilentLogging);
+   loG.Info("===== Supply & Demand EA Initialization =====");
 
    // Create Supply & Demand Manager
    g_SDManager = new CSupplyDemandManager();
    if(g_SDManager == NULL)
    {
-      Print("ERROR: Failed to create Supply Demand Manager");
+      loG.Warning("ERROR: Failed to create Supply Demand Manager");
       return INIT_FAILED;
    }
    
@@ -247,8 +277,8 @@ int OnInit()
    if(InpAutoVolumeThreshold)
    {
       volumeThreshold = CalculateVolumeThreshold();
-      if(InpDebugMode)
-         Print("Auto-calculated volume threshold: ", volumeThreshold);
+
+      loG.Log("  Auto-calculated volume threshold: " + IntegerToString(volumeThreshold));
    }
    
    // Initialize manager
@@ -287,36 +317,29 @@ int OnInit()
          return INIT_FAILED;
       }
       
-      if(InpDebugMode)
-         Print("Trading enabled with Magic Number: ", InpMagicNumber);
+      loG.Log("  Trading enabled with Magic Number: " + IntegerToString(InpMagicNumber));
    }
    
    // Perform initial zone detection
-   if(InpDebugMode)
-   {
-      if(InpDetectZoneByVolume)
-         Print("Starting volume-based zone detection...");
-      else
-         Print("Starting price action-based zone detection...");
-   }
+   if(InpDetectZoneByVolume)
+      loG.Info(" Starting volume-based zone detection...");
+   else
+      loG.Info(" Starting price action-based zone detection...");
    
    if(InpDetectZoneByVolume)
    {
       // Use volume-based detection (original method)
       if(!g_SDManager.DetectZones())
       {
-         Print("WARNING: Volume-based zone detection failed");
+         loG.Warning("Volume-based zone detection failed");
       }
       else
       {
          g_SDManager.ManageZoneDisplay();
-         
-         if(InpDebugMode)
-         {
-            Logging("Volume-based zone detection complete:");
-            Logging("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
-            Logging("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
-         }
+
+         loG.Info(" Volume-based zone detection complete:");
+         loG.Log("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
+         loG.Log("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
       }
    }
    else
@@ -324,13 +347,10 @@ int OnInit()
       // Use price action-based detection (common practice method)
       g_SDManager.DetectPriceActionZones();
       g_SDManager.ManageZoneDisplay();
-      
-      if(InpDebugMode)
-      {
-         Logging("Price action zone detection complete:");
-         Logging("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
-         Logging("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
-      }
+
+      loG.Info("Price action zone detection complete:");
+      loG.Log("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
+      loG.Log("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
    }
    
    // Initialize tracking
@@ -349,12 +369,12 @@ int OnInit()
          g_TodayOpeningBalance = g_DailyStartingBalance;  // Initialize today's opening balance
          ArrayResize(g_DailyProfits, 0);  // Initialize empty array
          SaveDailyData();
-         Logging("[EVAL] Initialized new daily data - Equity: $" + DoubleToString(g_DailyStartingEquity, 2) + " | Balance: $" + DoubleToString(g_DailyStartingBalance, 2));
+         loG.Info("  Initialized new daily data - Equity: $" + DoubleToString(g_DailyStartingEquity, 2) + " | Balance: $" + DoubleToString(g_DailyStartingBalance, 2));
       }
       else
       {
-         Logging("[EVAL] Loaded daily data - Equity: $" + DoubleToString(g_DailyStartingEquity, 2) + " | Balance: $" + DoubleToString(g_DailyStartingBalance, 2));
-         Logging("[EVAL] Daily Profit History: " + IntegerToString(ArraySize(g_DailyProfits)) + " days recorded");
+         loG.Info("  Loaded daily data - Equity: $" + DoubleToString(g_DailyStartingEquity, 2) + " | Balance: $" + DoubleToString(g_DailyStartingBalance, 2));
+         loG.Info("  Daily Profit History: " + IntegerToString(ArraySize(g_DailyProfits)) + " days recorded");
       }
       
       double dailyLoss = InpInitialBalance * InpDailyLossLimitPct / 100.0;
@@ -383,7 +403,7 @@ int OnInit()
       }
    }
    
-   Logging("Supply & Demand EA initialized successfully!");
+   loG.Info("Supply & Demand EA initialized successfully!");
    Logging("  Symbol: " + _Symbol);
    Logging("  Zone Timeframe: " + EnumToString(InpZoneTimeframe));
    Logging("  Show zones: " + (InpShowZone == -1 ? "All" : (InpShowZone == 0 ? "None" : IntegerToString(InpShowZone) + " closest")));
@@ -400,6 +420,14 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   // Cleanup logger
+   if(loG != NULL)
+   {
+      loG.Separator("===== Supply & Demand EA Shutdown =====");
+      delete loG;
+      loG = NULL;
+   }
+   
    // Cleanup
    if(g_SDManager != NULL)
    {
@@ -429,7 +457,7 @@ void OnDeinit(const int reason)
    DeleteTestingLogs();
    
    // if(InpDebugMode)
-   //    Print("Supply & Demand EA deinitialized. Reason: ", reason);
+   // Print("Supply & Demand EA deinitialized. Reason: " + IntegerToString(reason));
    //--- destroy timer
    EventKillTimer();
 }
@@ -459,56 +487,33 @@ void OnTick()
       
       if(InpUpdateOnNewBar)
       {
-         // if(InpDebugMode)
-         //    Print("New bar detected, updating zones...");
-         
+         // Detect new zones on new bar
          if(InpDetectZoneByVolume)
-         {
-            // Volume-based zone updates
             g_SDManager.DetectNewZones(20);
-            g_SDManager.UpdateAllZones();
-            g_SDManager.ManageZoneDisplay();
-         }
          else
-         {
-            // Price action-based zone updates
-            g_SDManager.DetectPriceActionZones();
-            g_SDManager.ManageZoneDisplay();
-         }
+            g_SDManager.DetectNewPriceActionZones(20);
       }
+   }
+   
+   // Time-based update (runs independently of new bar)
+   datetime currentTime = TimeCurrent();
+   bool shouldUpdate = (currentTime - g_LastUpdateTime >= InpUpdateIntervalSec);
+   
+   // Update zones if: 1) new bar with update enabled, OR 2) time interval reached
+   if((isNewBar && InpUpdateOnNewBar) || shouldUpdate)
+   {
+      if(shouldUpdate)
+         g_LastUpdateTime = currentTime;
+      
+      // Update all zones (state management, extension, cleanup)
+      g_SDManager.UpdateAllZones();
+      g_SDManager.ManageZoneDisplay();
    }
    
    // Manage trailing stops and TPs
    if(InpEnableTrading && !g_TradingDisabled && (InpEnableTrailingStop || InpEnableTrailingTP))
    {
       ManageTrailing();
-   }
-   
-   // Time-based update
-   datetime currentTime = TimeCurrent();
-   if(currentTime - g_LastUpdateTime >= InpUpdateIntervalSec)
-   {
-      g_LastUpdateTime = currentTime;
-      
-      if(InpDetectZoneByVolume)
-      {
-         // Volume-based periodic updates
-         g_SDManager.UpdateAllZones();
-         g_SDManager.ManageZoneDisplay();
-      }
-      else
-      {
-         // Price action-based periodic updates
-         g_SDManager.DetectPriceActionZones();
-         g_SDManager.ManageZoneDisplay();
-      }
-      
-      // if(InpDebugMode && !isNewBar)
-      // {
-      //    Print("Periodic update:");
-      //    Print("  Supply zones: ", g_SDManager.GetSupplyZoneCount());
-      //    Print("  Demand zones: ", g_SDManager.GetDemandZoneCount());
-      // }
    }
    
    // Get current price
@@ -875,15 +880,14 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    // Check if max trades reached
    if(HasPositionForZone(SD_ZONE_DEMAND))
    {
-      // if(InpDebugMode)
-      //    Print("[OpenBuyTrade] Max trades (", InpMaxTrade, ") reached for DEMAND zones");
+      loG.Info("[OpenBuyTrade] Max trades (" + IntegerToString(InpMaxTrade) + ") reached for DEMAND zones");
       return false;
    }
    
    double atr = GetATR();
    if(atr <= 0)
    {
-      Logging("[BUY] ERROR: Invalid ATR value");
+      loG.Error("[BUY] ERROR: Invalid ATR value");
       return false;
    }
    
@@ -897,7 +901,7 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
       double potentialRisk = MathAbs(price - sl) * InpLotSize * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       if(!CheckRiskConsistencyRule(_Symbol, POSITION_TYPE_BUY, potentialRisk))
       {
-         Logging("[EVAL] BUY trade blocked - Risk Consistency Rule would be breached");
+         loG.Warning("BUY trade blocked - Risk Consistency Rule would be breached");
          return false;
       }
    }
@@ -914,13 +918,13 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    
    if(g_Trade.Buy(InpLotSize, _Symbol, price, sl, tp, comment))
    {
-      Logging("  🟢 BUY order opened: Ticket=" + IntegerToString(g_Trade.ResultOrder()) + 
-            " Entry=" + DoubleToString(price, _Digits) + " SL=" + DoubleToString(sl, _Digits) + " TP=" + DoubleToString(tp, _Digits));
+      loG.Info("  🟢 BUY order opened: Ticket: " + IntegerToString(g_Trade.ResultOrder()) + 
+            " Entry: " + DoubleToString(price, _Digits) + " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
       return true;
    }
    else
    {
-      Logging("[BUY] ERROR: Failed to open BUY - " + g_Trade.ResultRetcodeDescription());
+      loG.Error("[BUY] ERROR: Failed to open BUY - " + g_Trade.ResultRetcodeDescription());
       return false;
    }
 }
@@ -936,15 +940,14 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    // Check if max trades reached
    if(HasPositionForZone(SD_ZONE_SUPPLY))
    {
-      // if(InpDebugMode)
-      //    Print("[OpenSellTrade] Max trades (", InpMaxTrade, ") reached for SUPPLY zones");
+      loG.Warning("[SELL] Max trades (" + IntegerToString(InpMaxTrade) + ") reached for SUPPLY zones");
       return false;
    }
    
    double atr = GetATR();
    if(atr <= 0)
    {
-      Logging("[SELL] ERROR: Invalid ATR value");
+      loG.Error("[SELL] ERROR: Invalid ATR value");
       return false;
    }
    
@@ -958,7 +961,7 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
       double potentialRisk = MathAbs(price - sl) * InpLotSize * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       if(!CheckRiskConsistencyRule(_Symbol, POSITION_TYPE_SELL, potentialRisk))
       {
-         Logging("[EVAL] SELL trade blocked - Risk Consistency Rule would be breached");
+         loG.Warning("SELL trade blocked - Risk Consistency Rule would be breached");
          return false;
       }
    }
@@ -975,13 +978,13 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    
    if(g_Trade.Sell(InpLotSize, _Symbol, price, sl, tp, comment))
    {
-      Logging("  🔴 SELL order opened: Ticket=" + IntegerToString(g_Trade.ResultOrder()) +
-            " Entry=" + DoubleToString(price, _Digits) + " SL=" + DoubleToString(sl, _Digits) + " TP=" + DoubleToString(tp, _Digits));
+      loG.Info("  🔴 SELL order opened: Ticket: " + IntegerToString(g_Trade.ResultOrder()) +
+            " Entry: " + DoubleToString(price, _Digits) + " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
       return true;
    }
    else
    {
-      Logging("[SELL] ERROR: Failed to open SELL - " + g_Trade.ResultRetcodeDescription());
+      loG.Error("[SELL] ERROR: Failed to open SELL - " + g_Trade.ResultRetcodeDescription());
       return false;
    }
 }
@@ -1010,7 +1013,7 @@ void CheckDailyReset()
       if(dayOfWeek == 0 || dayOfWeek == 6)
       {
          g_DailyTimerSet = false;
-         Logging("[EVAL] Weekend detected - skipping daily profit recording");
+         loG.Info("Weekend detected - skipping daily profit recording");
          return;
       }
       
@@ -1025,9 +1028,11 @@ void CheckDailyReset()
       // Add to daily profits array (only on weekdays)
       int arraySize = ArraySize(g_DailyProfits);
       ArrayResize(g_DailyProfits, arraySize + 1);
+      ArrayResize(g_DailyDates, arraySize + 1);
       g_DailyProfits[arraySize] = todayProfit;
+      g_DailyDates[arraySize] = TimeCurrent();
       
-      Logging("[EVAL] Daily Profit Recorded: $" + DoubleToString(todayProfit, 2) + " (Day " + IntegerToString(arraySize + 1) + ")");
+      Logging("Daily Profit Recorded: $" + DoubleToString(todayProfit, 2) + " (Day " + IntegerToString(arraySize + 1) + " - " + CFileHelper::GetDateString(TimeCurrent()) + ")");
       
       // Save current equity and balance as new daily starting values
       g_DailyStartingEquity = equity;
@@ -1050,9 +1055,9 @@ void CheckDailyReset()
       g_LastResetTime = TimeCurrent();
       g_DailyTimerSet = false;
       
-      Logging("[EVAL] Daily Reset at 23:55 - Saved new daily snapshot: Equity $" + DoubleToString(equity, _Digits) + " | Balance $" + DoubleToString(balance, _Digits));
-      Logging("[EVAL] New DLL Threshold: $" + DoubleToString(g_DailyLossThreshold, _Digits));
-      Logging("[EVAL] Profit Consistency: " + DoubleToString(g_ProfitConsistencyPct, 2) + "%");
+      Logging("Daily Reset at 23:55 - Saved new daily snapshot: Equity $" + DoubleToString(equity, _Digits) + " | Balance $" + DoubleToString(balance, _Digits));
+      Logging("New DLL Threshold: $" + DoubleToString(g_DailyLossThreshold, _Digits));
+      Logging("Profit Consistency: " + DoubleToString(g_ProfitConsistencyPct, 2) + "%");
    }
 }
 
@@ -1071,9 +1076,11 @@ void CheckEvaluationLimits()
       {
          g_TradingDisabled = true;
          CloseAllPositions("MLL Breached");
-         Logging("[EVAL] *** MAXIMUM LOSS LIMIT BREACHED *** Equity: $" + DoubleToString(equity, _Digits) + 
+         loG.Separator();
+         loG.Critical("*** MAXIMUM LOSS LIMIT BREACHED *** Equity: $" + DoubleToString(equity, _Digits) + 
                " <= MLL Threshold: $" + DoubleToString(g_MaxLossThreshold, _Digits));
-         Logging("[EVAL] TRADING PERMANENTLY DISABLED - Manual intervention required");
+         loG.Critical("TRADING PERMANENTLY DISABLED - Manual intervention required");
+         loG.Separator();
          Alert("MLL BREACHED! Trading DISABLED. Equity: $", equity);
          ExpertRemove();
       }
@@ -1087,11 +1094,11 @@ void CheckEvaluationLimits()
       {
          g_TradingDisabled = true;
          CloseAllPositions("DLL Breached");
-         Logging("═══════════════════════════════════════════");
-         Logging("[EVAL] *** DAILY LOSS LIMIT BREACHED *** Equity: $" + DoubleToString(equity, _Digits) + 
+         loG.Separator();
+         loG.Critical("*** DAILY LOSS LIMIT BREACHED *** Equity: $" + DoubleToString(equity, _Digits) + 
                " <= DLL Threshold: $" + DoubleToString(g_DailyLossThreshold, _Digits));
-         Logging("[EVAL] TRADING DISABLED until daily reset at 23:55");
-         Logging("═══════════════════════════════════════════");
+         loG.Critical("TRADING DISABLED until daily reset at 23:55");
+         loG.Separator();
          Alert("DLL BREACHED! Trading DISABLED until 23:55. Equity: $", equity);
       }
       return;
@@ -1102,7 +1109,7 @@ void CheckEvaluationLimits()
       if(g_TradingDisabled)
       {
          g_TradingDisabled = false;
-         Logging("[EVAL] Trading re-enabled after daily reset. Equity: $" + DoubleToString(equity, _Digits));
+         loG.Info("Trading re-enabled after daily reset. Equity: $" + DoubleToString(equity, _Digits));
       }
    }
    
@@ -1116,8 +1123,8 @@ void CheckEvaluationLimits()
    CheckProfitSharingRule();
    
    // Check Daily Loss Breached (DLB) - Soft limit (check against daily starting equity/balance)
-   // Only enforce if InpEnableDLB is true
-   if(InpEnableDLB)
+   // DLB applies when Profit Consistency Rule is disabled
+   if(!InpEnableProfitConsistencyRule)
    {
       // Use edge detection: only count when crossing FROM above threshold TO below threshold
       double dailyStartBase = (g_DailyStartingEquity > g_DailyStartingBalance) ? g_DailyStartingEquity : g_DailyStartingBalance;
@@ -1130,9 +1137,9 @@ void CheckEvaluationLimits()
       if(isNowBelowThreshold && wasAboveThreshold)
       {
          CloseAllPositions("DLB Soft Breach");
-         Logging("[EVAL] *** DLB BREACHED *** Equity: $" + DoubleToString(equity, _Digits) + 
+         loG.Critical("*** DLB BREACHED *** Equity: $" + DoubleToString(equity, _Digits) + 
                " < DLB Threshold: $" + DoubleToString(dlbThreshold, _Digits) + " (" + DoubleToString(InpDailyLossBreachedPct, 2) + "%) | Daily Start: $" + DoubleToString(dailyStartBase, _Digits));
-         Logging("[EVAL] All positions closed. Trading continues.");
+         loG.Info("All positions closed!");
          Alert("DLB BREACHED! Equity: $", equity);
       }
       
@@ -1199,10 +1206,10 @@ void CheckRCRSoftLimit()
    if(buyRisk > rcrSoftLimit)
    {
       double buyRiskPct = (buyRisk / InpInitialBalance) * 100.0;
-      Logging("═══════════════════════════════════════════");
-      Logging("[EVAL] *** RCR SOFT LIMIT BREACHED (BUY) *** Risk: $" + DoubleToString(buyRisk, 2) + 
+      loG.Separator();
+      loG.Critical("[EVAL] *** RCR SOFT LIMIT BREACHED (BUY) *** Risk: $" + DoubleToString(buyRisk, 2) + 
             " (" + DoubleToString(buyRiskPct, 2) + "%) > 90% of " + DoubleToString(InpRiskConsistencyPct, 1) + "% limit - Closing all BUY positions");
-      Logging("═══════════════════════════════════════════");
+      loG.Separator();
       Alert("RCR BREACH! Closing all BUY positions to prevent evaluation failure. Risk: ", DoubleToString(buyRiskPct, 2), "%");
       
       // Close all BUY positions
@@ -1216,7 +1223,7 @@ void CheckRCRSoftLimit()
          if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
          {
             if(g_Trade.PositionClose(ticket))
-               Logging("[EVAL] Closed BUY position #" + IntegerToString(ticket) + " - RCR Soft Limit");
+               Logging("Closed BUY position #" + IntegerToString(ticket) + " - RCR Soft Limit");
          }
       }
    }
@@ -1225,10 +1232,10 @@ void CheckRCRSoftLimit()
    if(sellRisk > rcrSoftLimit)
    {
       double sellRiskPct = (sellRisk / InpInitialBalance) * 100.0;
-      Logging("═══════════════════════════════════════════");
-      Logging("[EVAL] *** RCR SOFT LIMIT BREACHED (SELL) *** Risk: $" + DoubleToString(sellRisk, 2) + 
+      loG.Separator();
+      loG.Critical("[EVAL] *** RCR SOFT LIMIT BREACHED (SELL) *** Risk: $" + DoubleToString(sellRisk, 2) + 
             " (" + DoubleToString(sellRiskPct, 2) + "%) > 90% of " + DoubleToString(InpRiskConsistencyPct, 1) + "% limit - Closing all SELL positions");
-      Logging("═══════════════════════════════════════════");
+      loG.Separator();
       Alert("RCR BREACH! Closing all SELL positions to prevent evaluation failure. Risk: ", DoubleToString(sellRiskPct, 2), "%");
       
       // Close all SELL positions
@@ -1242,7 +1249,7 @@ void CheckRCRSoftLimit()
          if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
          {
             if(g_Trade.PositionClose(ticket))
-               Logging("[EVAL] Closed SELL position #" + IntegerToString(ticket) + " - RCR Soft Limit");
+               Logging("Closed SELL position #" + IntegerToString(ticket) + " - RCR Soft Limit");
          }
       }
    }
@@ -1315,9 +1322,9 @@ void CheckRCRHardLimit()
       double breachedPct = (breachedRisk / InpInitialBalance) * 100.0;
       string direction = (buyRisk > sellRisk) ? "BUY" : "SELL";
       
-      Logging("[EVAL] *** RCR HARD LIMIT BREACHED *** Direction: " + direction + " | Risk: $" + DoubleToString(breachedRisk, 2) + 
+      loG.Critical("[EVAL] *** RCR HARD LIMIT BREACHED *** Direction: " + direction + " | Risk: $" + DoubleToString(breachedRisk, 2) + 
             " (" + DoubleToString(breachedPct, 2) + "%) >= " + DoubleToString(InpRiskConsistencyPct, 1) + "% limit");
-      Logging("[EVAL] TRADING DISABLED - Evaluation rules violated");
+      loG.Critical("[EVAL] TRADING DISABLED - Evaluation rules violated");
       Alert("CRITICAL: RCR HARD LIMIT BREACHED! Trading DISABLED. Risk: ", DoubleToString(breachedPct, 2), "%");
    }
 }
@@ -1342,36 +1349,114 @@ void CheckProfitSharingRule()
    // Get profit consistency data
    double totalProfit = 0.0;
    double bestDayProfit = 0.0;
+   datetime bestDayDate = 0;
    int profitDays = ArraySize(g_DailyProfits);
    
    for(int i = 0; i < profitDays; i++)
    {
       totalProfit += g_DailyProfits[i];
       if(g_DailyProfits[i] > bestDayProfit)
+      {
          bestDayProfit = g_DailyProfits[i];
+         bestDayDate = g_DailyDates[i];
+      }
    }
    
-   // Check if profit consistency PASSES (under limit = good consistency)
-   // g_ProfitConsistencyPct is calculated in UpdateEvaluationDisplay()
-   if(g_ProfitConsistencyPct < InpProfitConsistencyPct && totalProfit > 0)
+   // Calculate current DLB percentage (for payout calculation)
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double dailyStartBase = MathMax(g_DailyStartingEquity, g_DailyStartingBalance);
+   double currentBase = MathMax(equity, balance);
+   double dailyLoss = dailyStartBase - currentBase;
+   double actualDLBPct = 0.0;
+   if(dailyLoss > 0 && dailyStartBase > 0)
+      actualDLBPct = dailyLoss / dailyStartBase * 100.0;
+   
+   // Determine payout percentage based on evaluation method
+   double payoutPct = 0.0;
+   string qualificationMethod = "";
+   bool qualified = false;
+   
+   if(InpEnableProfitConsistencyRule)
    {
-      // PASSED Profit Sharing Rule - Qualify for payout!
+      // Use Profit Consistency Rule with tiered payouts
+      if(g_ProfitConsistencyPct < InpProfitConsistencyPct && totalProfit > 0)
+      {
+         // < 20% = 90% profit sharing
+         payoutPct = 90.0;
+         qualificationMethod = "Profit Consistency Rule (< 20%)";
+         qualified = true;
+      }
+      else if(g_ProfitConsistencyPct >= 20.0 && g_ProfitConsistencyPct < 30.0 && totalProfit > 0)
+      {
+         // 20% - 30% = 10% profit sharing
+         payoutPct = 10.0;
+         qualificationMethod = "Profit Consistency Rule (20% - 30%)";
+         qualified = true;
+      }
+   }
+   else
+   {
+      // Use DLB-based payout calculation
+      if(actualDLBPct < 1.0)
+      {
+         payoutPct = 90.0;  // Can be 75% on 2nd payout, 90% on 3rd payout (manual review)
+         qualificationMethod = "DLB Rule (< 1%)";
+         qualified = true;
+      }
+      else if(actualDLBPct >= 1.0 && actualDLBPct < 1.5)
+      {
+         payoutPct = 50.0;
+         qualificationMethod = "DLB Rule (1% - 1.5%)";
+         qualified = true;
+      }
+      else if(actualDLBPct >= 1.5 && actualDLBPct < 2.0)
+      {
+         payoutPct = 30.0;
+         qualificationMethod = "DLB Rule (≥ 1.5%)";
+         qualified = true;
+      }
+      else if(actualDLBPct >= 2.0)
+      {
+         payoutPct = 20.0;
+         qualificationMethod = "DLB Rule (≥ 2%)";
+         qualified = true;
+      }
+   }
+   
+   // Process payout if qualified
+   if(qualified && payoutPct > 0)
+   {
       g_TradingDisabled = true;
-      CloseAllPositions("PAYOUT QUALIFIED - Profit Sharing Rule Passed");
+      CloseAllPositions("PAYOUT QUALIFIED - " + qualificationMethod);
       
-      Logging("═══════════════════════════════════════════");
-      Logging("🎉 *** CONGRATULATIONS - PAYOUT QUALIFIED! ***");
-      Logging("═══════════════════════════════════════════");
-      Logging("[EVAL] Profit Target Achieved: $" + DoubleToString(currentProfit, 2) + " / $" + DoubleToString(profitTarget, 2));
-      Logging("[EVAL] Profit Consistency: " + DoubleToString(g_ProfitConsistencyPct, 2) + "% < " + DoubleToString(InpProfitConsistencyPct, 1) + "% (PASSED)");
-      Logging("[EVAL] Best Day Profit: $" + DoubleToString(bestDayProfit, 2) + " | Total Profit: $" + DoubleToString(totalProfit, 2));
-      Logging("[EVAL] Trading Days: " + IntegerToString(profitDays));
-      Logging("[EVAL] All positions closed. TRADING DISABLED.");
-      Logging("[EVAL] Ready for payout withdrawal!");
-      Logging("═══════════════════════════════════════════");
+      double payoutAmount = currentProfit * (payoutPct / 100.0);
+      
+      loG.Info("\n");
+      loG.Info("         ╔════════════════════════════════════════╗");
+      loG.Info("         ║  CONGRATULATIONS - PAYOUT QUALIFIED!   ║");
+      loG.Info("         ╚════════════════════════════════════════╝");
+      loG.Info("         Profit Target Achieved: $" + DoubleToString(currentProfit, 2) + " / $" + DoubleToString(profitTarget, 2));
+      loG.Info("         Qualification Method: " + qualificationMethod);
+      
+      if(InpEnableProfitConsistencyRule)
+      {
+         loG.Info("         Profit Consistency: " + DoubleToString(g_ProfitConsistencyPct, 2) + "% < " + DoubleToString(InpProfitConsistencyPct, 1) + "% (PASSED)");
+      }
+      else
+      {
+         loG.Info("         Daily Loss Breached: " + DoubleToString(actualDLBPct, 2) + "%");
+      }
+      
+      loG.Info("         Best Day Profit: $" + DoubleToString(bestDayProfit, 2) + " on " + (bestDayDate > 0 ? CFileHelper::GetDateString(bestDayDate) : "Unknown"));
+      loG.Info("         Total Profit: $" + DoubleToString(totalProfit, 2));
+      loG.Info("         Trading Days: " + IntegerToString(profitDays));
+      loG.Info("         Payout Percentage: " + DoubleToString(payoutPct, 0) + "%");
+      loG.Info("         Amount Eligible for Withdrawal: $" + DoubleToString(payoutAmount, 2));
+      loG.Info("         Ready for payout withdrawal!");
+      loG.Info("\n");
       
       Alert("🎉 PAYOUT QUALIFIED! Profit: $", DoubleToString(currentProfit, 2), 
-            " | Consistency: ", DoubleToString(g_ProfitConsistencyPct, 2), "% - Trading STOPPED for payout!");
+            " | Payout: ", DoubleToString(payoutPct, 0), "% ($", DoubleToString(payoutAmount, 2), ")");
       ExpertRemove();
    }
 }
@@ -1412,7 +1497,7 @@ bool CheckRiskConsistencyRule(string symbol, ENUM_POSITION_TYPE direction, doubl
    
    if(totalRisk > rcrLimit)
    {
-      Logging("[EVAL] *** RCR SOFT LIMIT EXCEEDED *** Total Risk: $" + DoubleToString(totalRisk, _Digits) + 
+      loG.Critical("*** RCR SOFT LIMIT EXCEEDED *** Total Risk: $" + DoubleToString(totalRisk, _Digits) + 
             " > 90% RCR Limit: $" + DoubleToString(rcrLimit, _Digits) + " (" + DoubleToString(InpRiskConsistencyPct * 0.9, 2) + "%)");
       return false;
    }
@@ -1437,12 +1522,12 @@ void CloseAllPositions(string reason)
       if(g_Trade.PositionClose(ticket))
       {
          closed++;
-         Logging("[EVAL] Closed position #" + IntegerToString(ticket) + " - Reason: " + reason);
+         loG.Log("Closed position #" + IntegerToString(ticket) + " - Reason: " + reason);
       }
    }
    
    if(closed > 0)
-      Logging("[EVAL] Total positions closed: " + IntegerToString(closed) + " - Reason: " + reason);
+      loG.Log("Total positions closed: " + IntegerToString(closed) + " - Reason: " + reason);
 }
 
 //+------------------------------------------------------------------+
@@ -1452,26 +1537,28 @@ bool SaveDailyData()
 {
    if(!InpEnableEvaluation)
       return false;
+   
+   string workFolder = loG.GetWorkFolder();
       
    // Ensure work folder exists
-   if(!FileIsExist(work_folder))
+   if(!FileIsExist(workFolder))
    {
-      if(!CreateFolder(work_folder, common_folder))
+      if(!CFileHelper::CreateFolder(workFolder, false))
       {
-         Logging("[EVAL] Failed to create work folder: " + work_folder);
+         loG.Warning("[EVAL] Failed to create work folder: " + workFolder);
          return false;
       }
    }
    
-   int handle = FileOpen(work_folder + g_FileName, FILE_WRITE | FILE_BIN);
+   int handle = FileOpen(workFolder + g_FileName, FILE_WRITE | FILE_BIN);
    if(handle == INVALID_HANDLE)
    {
-      Logging("[EVAL] Failed to open file for writing: " + work_folder + g_FileName + " Error: " + IntegerToString(GetLastError()));
+      loG.Error("Failed to open file for writing: " + workFolder + g_FileName + " Error: " + IntegerToString(GetLastError()));
       return false;
    }
    
-   // Write data version (updated to v2 for profit consistency)
-   int version = 2;
+   // Write data version (updated to v3 for date tracking)
+   int version = 3;
    FileWriteInteger(handle, version, INT_VALUE);
    
    // Write daily snapshot data
@@ -1483,7 +1570,10 @@ bool SaveDailyData()
    int dailyProfitCount = ArraySize(g_DailyProfits);
    FileWriteInteger(handle, dailyProfitCount, INT_VALUE);
    for(int i = 0; i < dailyProfitCount; i++)
+   {
       FileWriteDouble(handle, g_DailyProfits[i]);
+      FileWriteLong(handle, g_DailyDates[i]);
+   }
    
    FileWriteDouble(handle, g_TodayOpeningBalance);
    
@@ -1499,40 +1589,48 @@ bool LoadDailyData()
    if(!InpEnableEvaluation)
       return false;
       
-   if(!FileIsExist(work_folder + g_FileName))
+   string workFolder = loG.GetWorkFolder();
+   
+   if(!FileIsExist(workFolder + g_FileName))
    {
-      Logging("[EVAL] Daily data file not found: " + work_folder + g_FileName);
+      loG.Warning("Daily data file not found: " + workFolder + g_FileName);
       return false;
    }
    
-   int handle = FileOpen(work_folder + g_FileName, FILE_READ | FILE_BIN);
+   int handle = FileOpen(workFolder + g_FileName, FILE_READ | FILE_BIN);
    if(handle == INVALID_HANDLE)
-   {
-      Logging("[EVAL] Failed to open file for reading: " + work_folder + g_FileName + " Error: " + IntegerToString(GetLastError()));
-      return false;
-   }
-   
+      loG.Error("Failed to open file for reading: " + workFolder + g_FileName + " Error: " + IntegerToString(GetLastError()));
    // Read data version
    int version = FileReadInteger(handle, INT_VALUE);
-   if(version < 1 || version > 2)
+   if(version < 1 || version > 3)
    {
-      Logging("[EVAL] Unsupported data file version: " + IntegerToString(version));
+      loG.Warning("Unsupported data file version: " + IntegerToString(version));
       FileClose(handle);
       return false;
    }
    
-   // Read daily snapshot data (version 1 and 2)
+   // Read daily snapshot data (all versions)
    g_DailyStartingEquity = FileReadDouble(handle);
    g_DailyStartingBalance = FileReadDouble(handle);
    g_LastResetTime = (datetime)FileReadLong(handle);
    
-   // Read profit consistency data (version 2 only)
+   // Read profit consistency data (version 2 and 3)
    if(version >= 2)
    {
       int dailyProfitCount = FileReadInteger(handle, INT_VALUE);
       ArrayResize(g_DailyProfits, dailyProfitCount);
+      ArrayResize(g_DailyDates, dailyProfitCount);
+      
       for(int i = 0; i < dailyProfitCount; i++)
+      {
          g_DailyProfits[i] = FileReadDouble(handle);
+         
+         // Version 3+ includes dates
+         if(version >= 3)
+            g_DailyDates[i] = (datetime)FileReadLong(handle);
+         else
+            g_DailyDates[i] = 0; // Unknown date for older data
+      }
       
       g_TodayOpeningBalance = FileReadDouble(handle);
    }
@@ -1540,6 +1638,7 @@ bool LoadDailyData()
    {
       // Version 1 - initialize empty profit array
       ArrayResize(g_DailyProfits, 0);
+      ArrayResize(g_DailyDates, 0);
       g_TodayOpeningBalance = g_DailyStartingBalance;
    }
    
@@ -1548,20 +1647,26 @@ bool LoadDailyData()
 }
 
 //+------------------------------------------------------------------+
-//| Delete Testing Logs (only if InpDebugMode=true)                 |
+//| Delete Testing Logs (only if InpDeleteFolder>=true)              |
 //+------------------------------------------------------------------+
 void DeleteTestingLogs()
 {
-   if(!InpDebugMode)
+   if(!InpDeleteFolder)
       return;
    
-   int flag = common_folder ? FILE_COMMON : 0;
+   // Check if logger exists
+   if(loG == NULL)
+      return;
+   
+   string workFolder = loG.GetWorkFolder();
+   string expertFolder = "SnD_Logs";
+   int flag = 0; // Not using common folder
    int deletedFiles = 0;
    int deletedFolders = 0;
    
-   // Delete all log files in work_folder
+   // Delete all log files in workFolder
    string file_name;
-   long search_handle = FileFindFirst(work_folder + "\\*.*", file_name, flag);
+   long search_handle = FileFindFirst(workFolder + "\\*.*", file_name, flag);
    
    if(search_handle != INVALID_HANDLE)
    {
@@ -1569,7 +1674,7 @@ void DeleteTestingLogs()
       {
          if(file_name != "." && file_name != "..")
          {
-            if(FileDelete(work_folder + "\\" + file_name, flag))
+            if(FileDelete(workFolder + "\\" + file_name, flag))
                deletedFiles++;
          }
       }
@@ -1578,19 +1683,19 @@ void DeleteTestingLogs()
       FileFindClose(search_handle);
    }
    
-   // Delete work_folder (account-specific folder)
+   // Delete workFolder (account-specific folder)
    if(deletedFiles > 0)
    {
-      if(FolderDelete(work_folder, flag))
+      if(FolderDelete(workFolder, flag))
       {
-         Print("[DEBUG] Deleted work folder: ", work_folder, " (", deletedFiles, " files removed)");
+         loG.Debug("[DEBUG] Deleted work folder: " + workFolder + " (" + IntegerToString(deletedFiles) + " files removed)");
          deletedFolders++;
       }
    }
    
-   // Delete all other account folders in expert_folder
+   // Delete all other account folders in expertFolder
    string folder_name;
-   search_handle = FileFindFirst(expert_folder + "\\*", folder_name, flag);
+   search_handle = FileFindFirst(expertFolder + "\\*", folder_name, flag);
    
    if(search_handle != INVALID_HANDLE)
    {
@@ -1598,7 +1703,7 @@ void DeleteTestingLogs()
       {
          if(folder_name != "." && folder_name != "..")
          {
-            string account_folder = expert_folder + "\\" + folder_name;
+            string account_folder = expertFolder + "\\" + folder_name;
             
             // Delete all files in this account folder
             string sub_file;
@@ -1626,14 +1731,14 @@ void DeleteTestingLogs()
       FileFindClose(search_handle);
    }
    
-   // Delete main expert_folder
+   // Delete main expertFolder
    if(deletedFolders > 0)
    {
-      if(FolderDelete(expert_folder, flag))
-         Print("[DEBUG] Deleted main folder: ", expert_folder, " (", deletedFolders, " subfolders removed)");
+      if(FolderDelete(expertFolder, 0))
+         loG.Debug("Deleted main folder: " + expertFolder + " (" + IntegerToString(deletedFolders) + " subfolders removed)");
    }
    
-   Print("[DEBUG] Testing logs cleanup completed - Files: ", deletedFiles, " | Folders: ", deletedFolders);
+   loG.Debug("Testing logs cleanup completed - Files: " + IntegerToString(deletedFiles) + " | Folders: " + IntegerToString(deletedFolders));
 }
 
 //+------------------------------------------------------------------+
@@ -1641,21 +1746,47 @@ void DeleteTestingLogs()
 //+------------------------------------------------------------------+
 void CreateEvaluationDisplay()
 {
-   int yOffset = 50;
-   int lineHeight = 14;
+   int i,sy=7;
+   int xOffset[12]=
+   {
+      10, 10,
+      180, 180,
+      350, 350,
+      620, 620,
+      850, 850,
+      1080, 1080
+   };
+   int yOffset[12]=
+   {
+      2, 1,
+      2, 1,
+      2, 1,
+      2, 1,
+      2, 1,
+      2, 1
+   };
+   int dy=16;
    
-   // Create 14 label lines (added total days traded)
-   for(int i = 0; i < 14; i++)
+   // Create 6 column with 2 label lines (added total days traded)
+   for(i = 0; i < 12; i++)
    {
       string labelName = g_DisplayLabel + "_" + IntegerToString(i);
-      ObjectCreate(0, labelName, OBJ_LABEL, 0, 0, 0);
-      ObjectSetInteger(0, labelName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, labelName, OBJPROP_XDISTANCE, 10);
-      ObjectSetInteger(0, labelName, OBJPROP_YDISTANCE, yOffset + (i * lineHeight));
-      ObjectSetInteger(0, labelName, OBJPROP_COLOR, clrDarkGray);
-      ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 11);
-      ObjectSetString(0, labelName, OBJPROP_FONT, "Microsoft Sans Serif");
+
+      g_label[i].Create(0, labelName, 0, xOffset[i], yOffset[i] * dy + sy);
+      g_label[i].Description("");
+      g_label[i].Color(clrDarkGray);
+      g_label[i].FontSize(9);
+      g_label[i].Font("Microsoft Sans Serif");
+      g_label[i].Corner(CORNER_LEFT_LOWER);
+
+      if(g_TradingDisabled && i == 1)
+         g_label[i].Color(clrRed);
+      else if(!g_TradingDisabled && i == 1)
+         g_label[i].Color(clrLime);
    }
+
+   UpdateEvaluationDisplay();
+   ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
@@ -1734,18 +1865,21 @@ void UpdateEvaluationDisplay()
    }
    
    string statusText = g_TradingDisabled ? "DISABLED" : "ACTIVE";
-   color statusColor = g_TradingDisabled ? clrRed : clrLime;
    
    // Calculate Profit Consistency (best day / total profit)
    double totalProfit = 0.0;
    double bestDayProfit = 0.0;
+   datetime bestDayDate = 0;
    int profitDays = ArraySize(g_DailyProfits);
    
    for(int i = 0; i < profitDays; i++)
    {
       totalProfit += g_DailyProfits[i];
       if(g_DailyProfits[i] > bestDayProfit)
+      {
          bestDayProfit = g_DailyProfits[i];
+         bestDayDate = g_DailyDates[i];
+      }
    }
    
    // Calculate profit consistency percentage and update global variable
@@ -1758,33 +1892,34 @@ void UpdateEvaluationDisplay()
    double profitTarget = InpInitialBalance * InpProfitTargetPct / 100.0;
    double currentProfit = balance - InpInitialBalance;
    
-   // Line by line text (14 lines)
-   string lines[14];
-   lines[0] = "═══ EVALUATION STATUS ═══";
-   lines[1] = "Status: " + statusText;
-   lines[2] = StringFormat("Equity: $%.2f | Balance: $%.2f", equity, balance);
-   lines[3] = "─────────────────────────";
-   lines[4] = StringFormat("DLL: $%.2f / $%.2f (%.1f%%)", dailyRemaining, dailyLossAllowed, (dailyRemaining / dailyLossAllowed * 100.0));
-   lines[5] = StringFormat("MLL: $%.2f / $%.2f (%.1f%%)", maxRemaining, maxLossAllowed, (maxRemaining / maxLossAllowed * 100.0));
-   lines[6] = "─────────────────────────";
-   lines[7] = StringFormat("DLB: %.2f%% | Limit: %.1f%%", actualDLBPct, InpDailyLossBreachedPct);
-   lines[8] = StringFormat("RCR: %.2f%% | Limit: %.1f%%", maxRCRPct, InpRiskConsistencyPct);
-   lines[9] = "─────────────────────────";
-   lines[10] = StringFormat("Profit Target: $%.2f / $%.2f", currentProfit, profitTarget);
-   lines[11] = StringFormat("Best Day: $%.2f | Total: $%.2f", bestDayProfit, totalProfit);
-   lines[12] = StringFormat("Profit Consistency: %.1f%% (Target: %.0f%%)", profitConsistencyPct, InpProfitConsistencyPct);
-   lines[13] = StringFormat("Total Days Traded: %d", profitDays);
-   
-   // Update each label
-   for(int i = 0; i < 14; i++)
+   // Line by line text 
+   g_label[0].Description("EVALUATION STATUS");
+   g_label[1].Description("             " + statusText);
+   g_label[2].Description(StringFormat("Equity: $%.2f", equity));
+   g_label[3].Description(StringFormat("Balance: $%.2f", balance));
+   g_label[4].Description(StringFormat("DLL: $%.2f / $%.2f (%.1f%%)", dailyRemaining, dailyLossAllowed, (dailyRemaining / dailyLossAllowed * 100.0)));
+   g_label[5].Description(StringFormat("MLL: $%.2f / $%.2f (%.1f%%)", maxRemaining, maxLossAllowed, (maxRemaining / maxLossAllowed * 100.0)));
+   // Calculate payout percentage for display
+   string label6Text = "";
+   if(InpEnableProfitConsistencyRule)
    {
-      string labelName = g_DisplayLabel + "_" + IntegerToString(i);
-      ObjectSetString(0, labelName, OBJPROP_TEXT, lines[i]);
-      
-      // Color status line differently
-      if(i == 1)
-         ObjectSetInteger(0, labelName, OBJPROP_COLOR, statusColor);
-      else
-         ObjectSetInteger(0, labelName, OBJPROP_COLOR, clrDarkGray);
+      label6Text = StringFormat("DLB: %.2f%% (Not Used)", actualDLBPct);
    }
+   else
+   {
+      // Determine payout % based on DLB
+      double payoutPct = 0.0;
+      if(actualDLBPct < 1.0) payoutPct = 90.0;
+      else if(actualDLBPct >= 1.0 && actualDLBPct < 1.5) payoutPct = 50.0;
+      else if(actualDLBPct >= 1.5 && actualDLBPct < 2.0) payoutPct = 30.0;
+      else if(actualDLBPct >= 2.0) payoutPct = 20.0;
+      label6Text = StringFormat("DLB: %.2f%% | Payout: %.0f%%", actualDLBPct, payoutPct);
+   }
+   
+   g_label[6].Description(label6Text);
+   g_label[7].Description(StringFormat("RCR: %.2f%% | Limit: %.1f%%", maxRCRPct, InpRiskConsistencyPct));
+   g_label[8].Description(StringFormat("Profit Target: $%.2f / $%.2f", currentProfit, profitTarget));
+   g_label[9].Description(StringFormat("Best Day: $%.2f (%s)", bestDayProfit, bestDayDate > 0 ? CFileHelper::GetDateString(bestDayDate) : "N/A"));
+   g_label[10].Description(StringFormat("Profit Consistency: %.1f%% %s %.0f%%", profitConsistencyPct, InpEnableProfitConsistencyRule ? "<" : "(Not Used)", InpProfitConsistencyPct));
+   g_label[11].Description(StringFormat("Total Days: %d | Profit: $%.2f", profitDays, totalProfit));
 }
