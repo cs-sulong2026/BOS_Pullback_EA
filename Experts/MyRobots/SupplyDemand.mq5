@@ -57,6 +57,10 @@ input group "=== Trailing Settings ==="
 input bool              InpEnableTrailingStop = false;         // Enable Trailing Stop
 input double            InpTrailingStopDistance = 50.0;        // Trailing Stop Distance (points)
 input double            InpTrailingStopStep = 10.0;            // Trailing Stop Step (points)
+input bool              InpEnableTrailingBBands = false;       // Enable Bollinger Bands Trailing SL and TP
+input int               InpBBands_Period = 20;                 // Bollinger Bands Period
+input int               InpBBands_Shift = 0;                   // Bollinger Bands Shift
+input double            InpBBands_Deviation = 2.0;             // Bollinger Bands Deviation
 input bool              InpEnableTrailingPSAR = false;         // Enable PSAR Trailing SL
 input double            InpPSAR_Step = 0.02;                   // PSAR Step
 input double            InpPSAR_Maximum = 0.2;                 // PSAR Maximum
@@ -105,6 +109,7 @@ int g_ATRHandle = INVALID_HANDLE;
 int g_cuATRHandle = INVALID_HANDLE;
 int g_PSARHandle = INVALID_HANDLE;
 int g_MAHandle = INVALID_HANDLE;
+int g_BBandsHandle = INVALID_HANDLE;
 
 //--- Tracking variables
 datetime g_LastBarTime = 0;
@@ -134,8 +139,11 @@ double g_TodayOpeningBalance = 0;       // Balance at start of today (for daily 
 double g_ProfitConsistencyPct = 0.0;    // Current profit consistency percentage
 double g_HighestDLBPct = 0.0;           // Highest DLB % ever reached (for payout calculation)
 double g_LastPayoutTier = 90.0;         // Last payout tier percentage (for change detection)
+bool g_DLB_WarningShown = false;        // Flag to prevent repeated DLB 1.4% warnings
 int g_TPHitCount = 0;                   // Total Take Profit hits
 int g_SLHitCount = 0;                   // Total Stop Loss hits
+int g_WinCount = 0;                     // Total winning trades
+int g_LossCount = 0;                    // Total losing trades
 datetime g_LastDealCheckTime = 0;       // Last time deals were checked
 
 //+------------------------------------------------------------------+
@@ -347,6 +355,20 @@ int OnInit()
          return INIT_FAILED;
       }
 
+      // // Create Bollinger Bands indicator if enabled
+      // if(InpEnableTrailingBBands)
+      // {
+      //    g_BBandsHandle = iBands(_Symbol, InpZoneTimeframe, InpBBands_Period, InpBBands_Shift, InpBBands_Deviation, PRICE_WEIGHTED);
+      //    if(g_BBandsHandle == INVALID_HANDLE)
+      //    {
+      //       loG.Error("Failed to create Bollinger Bands indicator! Error '" + ErrorDescription(GetLastError()) + "'");
+      //       delete g_SDManager;
+      //       g_SDManager = NULL;
+      //       return INIT_FAILED;
+      //    }
+      //    loG.Log("  Bollinger Bands Trailing SL/TP enabled (Period=20, Deviation=2.0)");
+      // }
+
       // Create current ATR indicator for dynamic TP if enabled
       if(InpEnableDynamicATR_TP)
       {
@@ -387,6 +409,20 @@ int OnInit()
             return INIT_FAILED;
          }
          loG.Log("  MA Trailing SL enabled (Period=" + IntegerToString(InpMA_Period) + ", Method=" + EnumToString(InpMA_Method) + ")");
+      }
+      
+      // Create Bollinger Bands indicator if enabled
+      if(InpEnableTrailingBBands)
+      {
+         g_BBandsHandle = iBands(_Symbol, PERIOD_CURRENT, InpBBands_Period, InpBBands_Shift, InpBBands_Deviation, PRICE_WEIGHTED);
+         if(g_BBandsHandle == INVALID_HANDLE)
+         {
+            loG.Error("Failed to create Bollinger Bands indicator! Error '" + ErrorDescription(GetLastError()) + "'");
+            delete g_SDManager;
+            g_SDManager = NULL;
+            return INIT_FAILED;
+         }
+         loG.Log("  Bollinger Bands Trailing enabled (Period=" + IntegerToString(InpBBands_Period) + ", Deviation=" + DoubleToString(InpBBands_Deviation, 1) + ")");
       }
       
       loG.Log("  Trading enabled with Magic Number: " + IntegerToString(InpMagicNumber));
@@ -515,6 +551,13 @@ void OnDeinit(const int reason)
       g_ATRHandle = INVALID_HANDLE;
    }
 
+   // Release Bollinger Bands indicator
+   if(g_BBandsHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(g_BBandsHandle);
+      g_BBandsHandle = INVALID_HANDLE;
+   }
+
    // Release Current ATR indicator
    if(g_cuATRHandle != INVALID_HANDLE)
    {
@@ -586,6 +629,11 @@ void OnTick()
             g_SDManager.DetectNewZones(20);
          else
             g_SDManager.DetectNewPriceActionZones(20);
+      }
+      
+      if(InpEnableTrading && !g_TradingDisabled && InpEnableTrailingBBands)
+      {
+         ManageTrailing();
       }
    }
    
@@ -912,6 +960,111 @@ void ManageTrailing()
          }
       }
       
+      // Bollinger Bands Trailing Stop and TP Logic
+      if(InpEnableTrailingBBands && g_BBandsHandle != INVALID_HANDLE)
+      {
+         double upperBand[], lowerBand[], middleBand[];
+         ArraySetAsSeries(upperBand, true);
+         ArraySetAsSeries(lowerBand, true);
+         ArraySetAsSeries(middleBand, true);
+         
+         // Get all bands (BASE_LINE=0, UPPER_BAND=1, LOWER_BAND=2)
+         if(CopyBuffer(g_BBandsHandle, 0, 0, 2, middleBand) > 0 &&
+            CopyBuffer(g_BBandsHandle, 1, 0, 2, upperBand) > 0 && 
+            CopyBuffer(g_BBandsHandle, 2, 0, 2, lowerBand) > 0)
+         {
+            int spread = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+            int stopLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+            
+            if(posType == POSITION_TYPE_BUY)
+            {
+               // For BUY: Use lower band [1] as trailing SL (avoid repainting)
+               double bbSL = lowerBand[1];
+               loG.Debug(" BB Lower Band[1]: " + DoubleToString(bbSL, _Digits));
+               
+               // Trail SL: only move higher, must be below current price
+               if(bbSL < currentPrice && bbSL > posSL)
+               {
+                  // Respect minimum stop level
+                  if(currentPrice - bbSL >= stopLevel * point)
+                  {
+                     bbSL = NormalizeDouble(MathFloor(bbSL / tickSize) * tickSize, _Digits);
+                     if(bbSL > newSL)
+                     {
+                        newSL = bbSL;
+                        modified = true;
+                     }
+                  }
+               }
+               
+               // For BUY: Use middle band [1] as trailing TP (conservative target)
+               // Try using upper band [1] for more aggressive TP?
+               if(posTP > 0)
+               {
+                  double bbTP = upperBand[1];
+                  loG.Debug(" BB Upper Band[1]: " + DoubleToString(bbTP, _Digits));
+                  
+                  // Trail TP: only move higher, should be reasonable target
+                  if(bbTP > posTP)
+                  {
+                     // Ensure TP is above current price with minimum distance
+                     if(bbTP > currentPrice && (bbTP - currentPrice) >= stopLevel * point)
+                     {
+                        bbTP = NormalizeDouble(MathCeil(bbTP / tickSize) * tickSize, _Digits);
+                        if(bbTP > newTP)
+                        {
+                           newTP = bbTP;
+                           modified = true;
+                        }
+                     }
+                  }
+               }
+            }
+            else // POSITION_TYPE_SELL
+            {
+               // For SELL: Use upper band [1] as trailing SL (avoid repainting)
+               double bbSL = upperBand[1] + (spread * point);
+               
+               // Trail SL: only move lower, must be above current price
+               if(bbSL > currentPrice && (posSL == 0 || bbSL < posSL))
+               {
+                  // Respect minimum stop level
+                  if(bbSL - currentPrice >= stopLevel * point)
+                  {
+                     bbSL = NormalizeDouble(MathCeil(bbSL / tickSize) * tickSize, _Digits);
+                     if(posSL == 0 || bbSL < newSL)
+                     {
+                        newSL = bbSL;
+                        modified = true;
+                     }
+                  }
+               }
+               
+               // For SELL: Use middle band [1] as trailing TP (conservative target)
+               // Try using lower band [0] for more aggressive TP?
+               if(posTP > 0)
+               {
+                  double bbTP = lowerBand[1];
+                  
+                  // Trail TP: only move lower, should be reasonable target
+                  if(bbTP < posTP)
+                  {
+                     // Ensure TP is below current price with minimum distance
+                     if(bbTP < currentPrice && (currentPrice - bbTP) >= stopLevel * point)
+                     {
+                        bbTP = NormalizeDouble(MathFloor(bbTP / tickSize) * tickSize, _Digits);
+                        if(posTP == 0 || bbTP < newTP)
+                        {
+                           newTP = bbTP;
+                           modified = true;
+                        }
+                     }
+                  }
+               }
+            }
+         }
+      }
+
       // ATR-Based Dynamic TP Logic (Trailing - only extends, distance tightens with profit)
       if(InpEnableDynamicATR_TP && posTP > 0 && g_ATRHandle != INVALID_HANDLE)
       {
@@ -1316,6 +1469,9 @@ void CheckDailyReset()
       // Re-enable trading if it was disabled due to DLL
       g_TradingDisabled = false;
       
+      // Reset DLB warning flag for new day
+      g_DLB_WarningShown = false;
+      
       // Reset last equity check for new day
       g_LastEquityCheck = equity;
       
@@ -1389,8 +1545,8 @@ void CheckEvaluationLimits()
    // Check Profit Sharing Rule - Qualify for payout
    CheckProfitSharingRule();
    
-   // Track TP/SL hits
-   CheckTPSLHits();
+   // // Track TP/SL hits
+   // CheckTPSLHits();
    
    // Track Daily Loss Breached (DLB) for payout calculation (accumulates worst loss, resets daily)
    // DLB tracking runs regardless of which evaluation method is active
@@ -1417,8 +1573,17 @@ void CheckEvaluationLimits()
       if(newPayoutTier != g_LastPayoutTier)
       {
          g_LastPayoutTier = newPayoutTier;
-         loG.Info("[DLB] Payout tier changed: " + DoubleToString(g_HighestDLBPct, 2) + "% → " + DoubleToString(newPayoutTier, 0) + "% profit sharing (Daily Loss: $" + DoubleToString(dailyLoss, 2) + ")");
+         loG.Info("[DLB] Payout tier changed to " + DoubleToString(newPayoutTier, 0) + "% | Highest DLB: " + DoubleToString(g_HighestDLBPct, 2) + "% | Current DLB: " + DoubleToString(currentDLBPct, 2) + "% | Daily Loss: $" + DoubleToString(dailyLoss, 2));
       }
+   }
+   
+   // Warn when approaching 1.5% DLB threshold (only once per day)
+   if(!InpEnableProfitConsistencyRule && !g_DLB_WarningShown && currentDLBPct >= 1.3 && currentDLBPct < 1.4)
+   {
+      g_DLB_WarningShown = true;
+      loG.Warning("[DLB] Approaching 1.5% threshold! Current: " + DoubleToString(currentDLBPct, 2) + "% | Highest: " + DoubleToString(g_HighestDLBPct, 2) + "% - Consider closing positions to avoid payout tier downgrade");
+      // Uncomment below to auto-close all positions at 1.4%:
+      CloseAllPositions("DLB 1.4% Warning");
    }
 }
 
@@ -1705,7 +1870,7 @@ void CheckProfitSharingRule()
       loG.Info("         ╔════════════════════════════════════════╗");
       loG.Info("         ║  CONGRATULATIONS - PAYOUT QUALIFIED!   ║");
       loG.Info("         ╚════════════════════════════════════════╝");
-      loG.Info("         Profit Target Achieved: $" + DoubleToString(currentProfit, 2) + " / $" + DoubleToString(profitTarget, 2));
+      loG.Info("         " + DoubleToString(InpProfitTargetPct, 0) + "% Profit Target Achieved: $" + DoubleToString(currentProfit, 2) + " / $" + DoubleToString(profitTarget, 2));
       loG.Info("         Qualification Method: " + qualificationMethod);
       
       if(InpEnableProfitConsistencyRule)
@@ -1721,7 +1886,8 @@ void CheckProfitSharingRule()
       loG.Info("         Total Profit: $" + DoubleToString(currentProfit, 2));
       loG.Info("         Trading Days: " + IntegerToString(profitDays));
       loG.Info("         Take Profit Hits: " + IntegerToString(g_TPHitCount) + " | Stop Loss Hits: " + IntegerToString(g_SLHitCount));
-      loG.Info("         Win Rate: " + DoubleToString((g_TPHitCount + g_SLHitCount > 0 ? (g_TPHitCount * 100.0 / (g_TPHitCount + g_SLHitCount)) : 0.0), 2) + "%");
+      loG.Info("         Win Trades: " + IntegerToString(g_WinCount) + " | Loss Trades: " + IntegerToString(g_LossCount));
+      loG.Info("         Win Rate: " + DoubleToString((g_WinCount + g_LossCount > 0 ? (g_WinCount * 100.0 / (g_WinCount + g_LossCount)) : 0.0), 2) + "%");
       loG.Info("         Payout Percentage: " + DoubleToString(payoutPct, 0) + "%");
       loG.Info("         Amount Eligible for Withdrawal: $" + DoubleToString(payoutAmount, 2));
       loG.Info("");
@@ -1815,23 +1981,65 @@ void CheckTPSLHits()
       ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
       if(dealEntry != DEAL_ENTRY_OUT) continue;
       
-      // Get deal profit
-      double dealProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
-      double dealSwap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
-      double dealCommission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
-      double netProfit = dealProfit + dealSwap + dealCommission;
+      // Get position ID and find entry deal to get opening price
+      long dealPosID = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
       
-      // Classify as TP or SL based on net profit
-      if(netProfit > 0)
+      // Select all deals for this position
+      HistorySelectByPosition(dealPosID);
+      
+      // Find the entry deal (opening price)
+      double entryPrice = 0.0;
+      for(int j = 0; j < HistoryDealsTotal(); j++)
+      {
+         ulong entryTicket = HistoryDealGetTicket(j);
+         if(entryTicket == 0) continue;
+         
+         ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(entryTicket, DEAL_ENTRY);
+         if(entry == DEAL_ENTRY_IN)
+         {
+            entryPrice = HistoryDealGetDouble(entryTicket, DEAL_PRICE);
+            break;
+         }
+      }
+      
+      // Re-select original time range (HistorySelectByPosition changed the context)
+      HistorySelect(g_LastDealCheckTime, currentTime);
+      
+      if(entryPrice == 0.0) continue; // Skip if entry price not found
+      
+      double dealPrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+      double dealSL = HistoryDealGetDouble(dealTicket, DEAL_SL);
+      double dealTP = HistoryDealGetDouble(dealTicket, DEAL_TP);
+      double dealProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+      
+      // Calculate distance in pips
+      double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+      int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+      double pipFactor = (digits == 3 || digits == 5) ? 10.0 : 1.0; // 5-digit/3-digit brokers
+      double dealDistancePips = MathAbs(entryPrice - dealPrice) / (point * pipFactor);
+
+      // Check if TP hit
+      if(dealTP > 0 && MathAbs(dealPrice - dealTP) < point)
       {
          g_TPHitCount++;
-         loG.Debug("[TP Hit] Deal #" + IntegerToString(dealTicket) + " | Profit: $" + DoubleToString(netProfit, 2));
+         loG.Log("[TP Hit] #" + IntegerToString(dealTicket) + 
+               " | Profit: $" + DoubleToString(dealProfit, 2) + 
+               " | Distance: " + DoubleToString(dealDistancePips, 1) + " pips");
       }
-      else if(netProfit < 0)
+      // Check if SL hit
+      else if(dealSL > 0 && MathAbs(dealPrice - dealSL) < point)
       {
          g_SLHitCount++;
-         loG.Debug("[SL Hit] Deal #" + IntegerToString(dealTicket) + " | Loss: $" + DoubleToString(netProfit, 2));
+         loG.Log("[SL Hit] #" + IntegerToString(dealTicket) + 
+               " | Profit: $" + DoubleToString(dealProfit, 2) + 
+               " | Distance: " + DoubleToString(dealDistancePips, 1) + " pips");
       }
+
+      // Update win/loss
+      if(dealProfit > 0)
+         g_WinCount++;
+      else if(dealProfit < 0)
+         g_LossCount++;
    }
    
    g_LastDealCheckTime = currentTime;
