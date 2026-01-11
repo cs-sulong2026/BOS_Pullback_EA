@@ -334,9 +334,17 @@ void CSupplyDemandZone::DrawLabel()
 
    int index = m_zone.zoneIndex + 1;
    if(m_zone.type == SD_ZONE_SUPPLY)
+   {
       stateText = stateText + " SUPPLY ZONE " + IntegerToString(index);
+      if(m_zone.touchCount > 0)
+         stateText = stateText + " (T: " + IntegerToString(m_zone.touchCount) + " )";
+   }
    else
+   {
       stateText = stateText + " DEMAND ZONE " + IntegerToString(index);
+      if(m_zone.touchCount > 0)
+         stateText = stateText + " (T: " + IntegerToString(m_zone.touchCount) + " )";
+   }
    
    // Check if this is a price action zone (dummy volume = 1000)
    bool isPriceActionZone = (m_zone.volumeTotal == 1000 && m_zone.volumeAvg == 1000.0);
@@ -466,6 +474,7 @@ void CSupplyDemandZone::Update()
       int borderWidth = (m_zone.state == SD_STATE_UNTESTED) ? 2 : 1;
       ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_WIDTH, borderWidth);
    }
+
 }
 
 //+------------------------------------------------------------------+
@@ -1157,7 +1166,8 @@ void CSupplyDemandManager::UpdateAllZones()
                   // Print("[IsPriceTouching] SUPPLY ", i+1, " RETURN after leaving | Price=", currentPrice, " Bottom=", m_supplyZones[i].GetBottom(), " Top=", m_supplyZones[i].GetTop());
                   
                   // Open SELL trade for supply zone
-                  OpenSellTrade(m_supplyZones[i]);
+                  if(m_supplyZones[i].GetTouchCount() < 5) // Example volume check
+                     OpenSellTrade(m_supplyZones[i]);
 
                   m_supplyZones[i].SetState(SD_STATE_ACTIVE);
                }
@@ -1175,7 +1185,9 @@ void CSupplyDemandManager::UpdateAllZones()
                // Open SELL trade for weak supply zone (only if weak zone trading enabled)
                if(m_enableTradeOnWeakZone)
                {
-                  OpenSellTrade(m_supplyZones[i]);
+                  if(m_supplyZones[i].GetTouchCount() < 5) // Example volume check
+                     OpenSellTrade(m_supplyZones[i]);
+
                   m_supplyZones[i].SetState(SD_STATE_ACTIVE);
                }
             }
@@ -1292,7 +1304,8 @@ void CSupplyDemandManager::UpdateAllZones()
                   // Print("[IsPriceTouching] DEMAND ", i+1, " RETURN after leaving | Price=", currentPrice, " Bottom=", m_demandZones[i].GetBottom(), " Top=", m_demandZones[i].GetTop());
                   
                   // Open BUY trade for demand zone
-                  OpenBuyTrade(m_demandZones[i]);
+                  if(m_demandZones[i].GetTouchCount() < 5) // Example volume check
+                     OpenBuyTrade(m_demandZones[i]);
 
                   m_demandZones[i].SetState(SD_STATE_ACTIVE);
                }
@@ -1310,7 +1323,9 @@ void CSupplyDemandManager::UpdateAllZones()
                // Open BUY trade for weak demand zone (only if weak zone trading enabled)
                if(m_enableTradeOnWeakZone)
                {
-                  OpenBuyTrade(m_demandZones[i]);
+                  if(m_demandZones[i].GetTouchCount() < 5) // Example volume check
+                     OpenBuyTrade(m_demandZones[i]);
+
                   m_demandZones[i].SetState(SD_STATE_ACTIVE);
                }
             }

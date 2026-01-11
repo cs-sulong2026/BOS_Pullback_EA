@@ -57,9 +57,19 @@ input group "=== Trailing Settings ==="
 input bool              InpEnableTrailingStop = false;         // Enable Trailing Stop
 input double            InpTrailingStopDistance = 50.0;        // Trailing Stop Distance (points)
 input double            InpTrailingStopStep = 10.0;            // Trailing Stop Step (points)
+input bool              InpEnableTrailingPSAR = false;         // Enable PSAR Trailing SL
+input double            InpPSAR_Step = 0.02;                   // PSAR Step
+input double            InpPSAR_Maximum = 0.2;                 // PSAR Maximum
+input bool              InpEnableTrailingMA = false;           // Enable MA Trailing SL
+input int               InpMA_Period = 14;                     // MA Period
+input int               InpMA_Shift = 0;                       // MA Shift
+input ENUM_MA_METHOD    InpMA_Method = MODE_SMA;               // MA Method
+input ENUM_APPLIED_PRICE InpMA_Applied = PRICE_CLOSE;          // MA Applied Price
 input bool              InpEnableTrailingTP = false;           // Enable Trailing TP
 input double            InpTrailingTPDistance = 50.0;          // Trailing TP Distance (points)
 input double            InpTrailingTPStep = 10.0;              // Trailing TP Step (points)
+input bool              InpEnableDynamicATR_TP = false;        // Enable ATR-Based Dynamic TP
+input double            InpDynamicTP_ATRMultiplier = 3.5;      // Dynamic TP ATR Multiplier
 
 input group "=== Zone Display Settings ==="
 input int               InpShowZone = -1;                         // Show Zones (-1=all, 0=none, N=closest)
@@ -92,6 +102,9 @@ CChartObjectLabel    g_label[12];
 
 //--- Global indicators
 int g_ATRHandle = INVALID_HANDLE;
+int g_cuATRHandle = INVALID_HANDLE;
+int g_PSARHandle = INVALID_HANDLE;
+int g_MAHandle = INVALID_HANDLE;
 
 //--- Tracking variables
 datetime g_LastBarTime = 0;
@@ -333,6 +346,48 @@ int OnInit()
          g_SDManager = NULL;
          return INIT_FAILED;
       }
+
+      // Create current ATR indicator for dynamic TP if enabled
+      if(InpEnableDynamicATR_TP)
+      {
+         g_cuATRHandle = iATR(_Symbol, ChartPeriod(), InpATRPeriod);
+         if(g_cuATRHandle == INVALID_HANDLE)
+         {
+            loG.Error("Failed to create Current ATR indicator! Error '" + ErrorDescription(GetLastError()) + "'");
+            delete g_SDManager;
+            g_SDManager = NULL;
+            return INIT_FAILED;
+         }
+         loG.Log("  Dynamic ATR-based TP enabled (Multiplier=" + DoubleToString(InpDynamicTP_ATRMultiplier, 2) + ")");
+      }
+      
+      // Create PSAR indicator if enabled
+      if(InpEnableTrailingPSAR)
+      {
+         g_PSARHandle = iSAR(_Symbol, PERIOD_CURRENT, InpPSAR_Step, InpPSAR_Maximum);
+         if(g_PSARHandle == INVALID_HANDLE)
+         {
+            loG.Error("Failed to create PSAR indicator! Error '" + ErrorDescription(GetLastError()) + "'");
+            delete g_SDManager;
+            g_SDManager = NULL;
+            return INIT_FAILED;
+         }
+         loG.Log("  PSAR Trailing SL enabled (Step=" + DoubleToString(InpPSAR_Step, 2) + ", Max=" + DoubleToString(InpPSAR_Maximum, 2) + ")");
+      }
+      
+      // Create MA indicator if enabled
+      if(InpEnableTrailingMA)
+      {
+         g_MAHandle = iMA(_Symbol, PERIOD_CURRENT, InpMA_Period, InpMA_Shift, InpMA_Method, InpMA_Applied);
+         if(g_MAHandle == INVALID_HANDLE)
+         {
+            loG.Error("Failed to create MA indicator! Error '" + ErrorDescription(GetLastError()) + "'");
+            delete g_SDManager;
+            g_SDManager = NULL;
+            return INIT_FAILED;
+         }
+         loG.Log("  MA Trailing SL enabled (Period=" + IntegerToString(InpMA_Period) + ", Method=" + EnumToString(InpMA_Method) + ")");
+      }
       
       loG.Log("  Trading enabled with Magic Number: " + IntegerToString(InpMagicNumber));
    }
@@ -458,6 +513,27 @@ void OnDeinit(const int reason)
    {
       IndicatorRelease(g_ATRHandle);
       g_ATRHandle = INVALID_HANDLE;
+   }
+
+   // Release Current ATR indicator
+   if(g_cuATRHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(g_cuATRHandle);
+      g_cuATRHandle = INVALID_HANDLE;
+   }
+   
+   // Release PSAR indicator
+   if(g_PSARHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(g_PSARHandle);
+      g_PSARHandle = INVALID_HANDLE;
+   }
+   
+   // Release MA indicator
+   if(g_MAHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(g_MAHandle);
+      g_MAHandle = INVALID_HANDLE;
    }
    
    // Clean up evaluation display
@@ -706,6 +782,86 @@ void ManageTrailing()
       double newSL = posSL;
       double newTP = posTP;
       
+      // PSAR Trailing Stop Logic
+      if(InpEnableTrailingPSAR && g_PSARHandle != INVALID_HANDLE)
+      {
+         double psarBuffer[];
+         ArraySetAsSeries(psarBuffer, true);
+         if(CopyBuffer(g_PSARHandle, 0, 0, 2, psarBuffer) > 0)
+         {
+            double level = (posType == POSITION_TYPE_BUY) ? 
+                          SymbolInfoDouble(_Symbol, SYMBOL_BID) - SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * point :
+                          SymbolInfoDouble(_Symbol, SYMBOL_ASK) + SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
+            
+            double psar_sl = NormalizeDouble(psarBuffer[1], _Digits);
+            double base = (posSL == 0.0) ? posOpenPrice : posSL;
+            
+            if(posType == POSITION_TYPE_BUY)
+            {
+               // For long: PSAR should be below price and higher than current SL
+               if(psar_sl > base && psar_sl < level)
+               {
+                  newSL = psar_sl;
+                  modified = true;
+               }
+            }
+            else // POSITION_TYPE_SELL
+            {
+               // For short: PSAR should be above price and lower than current SL
+               psar_sl = NormalizeDouble(psar_sl + SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * point, _Digits);
+               if(psar_sl < base && psar_sl > level)
+               {
+                  newSL = psar_sl;
+                  modified = true;
+               }
+            }
+         }
+      }
+      
+      // MA Trailing Stop Logic
+      if(InpEnableTrailingMA && g_MAHandle != INVALID_HANDLE)
+      {
+         double maBuffer[];
+         ArraySetAsSeries(maBuffer, true);
+         if(CopyBuffer(g_MAHandle, 0, 0, 2, maBuffer) > 0)
+         {
+            double level = (posType == POSITION_TYPE_BUY) ? 
+                          SymbolInfoDouble(_Symbol, SYMBOL_BID) - SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * point :
+                          SymbolInfoDouble(_Symbol, SYMBOL_ASK) + SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
+            
+            double ma_sl = NormalizeDouble(maBuffer[1], _Digits);
+            double base = (posSL == 0.0) ? posOpenPrice : posSL;
+            
+            if(posType == POSITION_TYPE_BUY)
+            {
+               // For long: MA should be below price and higher than current SL
+               if(ma_sl > base && ma_sl < level)
+               {
+                  // Use the better SL (higher for longs)
+                  if(ma_sl > newSL)
+                  {
+                     newSL = ma_sl;
+                     modified = true;
+                  }
+               }
+            }
+            else // POSITION_TYPE_SELL
+            {
+               // For short: MA should be above price and lower than current SL
+               ma_sl = NormalizeDouble(ma_sl + SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * point, _Digits);
+               if(ma_sl < base && ma_sl > level)
+               {
+                  // Use the better SL (lower for shorts)
+                  if(ma_sl < newSL || newSL == posSL)
+                  {
+                     newSL = ma_sl;
+                     modified = true;
+                  }
+               }
+            }
+         }
+      }
+      
       // Trailing Stop Logic
       if(InpEnableTrailingStop)
       {
@@ -723,8 +879,13 @@ void ManageTrailing()
                // Only modify if new SL is higher than current SL by at least step amount
                if(newStopLevel > posSL + trailStep)
                {
-                  newSL = NormalizeDouble(MathFloor(newStopLevel / tickSize) * tickSize, _Digits);
-                  modified = true;
+                  double candidateSL = NormalizeDouble(MathFloor(newStopLevel / tickSize) * tickSize, _Digits);
+                  // Use the better SL (higher for longs)
+                  if(candidateSL > newSL)
+                  {
+                     newSL = candidateSL;
+                     modified = true;
+                  }
                }
             }
          }
@@ -739,7 +900,76 @@ void ManageTrailing()
                // Only modify if new SL is lower than current SL by at least step amount
                if(newStopLevel < posSL - trailStep)
                {
-                  newSL = NormalizeDouble(MathCeil(newStopLevel / tickSize) * tickSize, _Digits);
+                  double candidateSL = NormalizeDouble(MathCeil(newStopLevel / tickSize) * tickSize, _Digits);
+                  // Use the better SL (lower for shorts)
+                  if(candidateSL < newSL || newSL == posSL)
+                  {
+                     newSL = candidateSL;
+                     modified = true;
+                  }
+               }
+            }
+         }
+      }
+      
+      // ATR-Based Dynamic TP Logic (Trailing - only extends, distance tightens with profit)
+      if(InpEnableDynamicATR_TP && posTP > 0 && g_ATRHandle != INVALID_HANDLE)
+      {
+         double atrBuffer[];
+         ArraySetAsSeries(atrBuffer, true);
+         if(CopyBuffer(g_ATRHandle, 0, 0, 2, atrBuffer) > 0)
+         {
+            double currentATR = atrBuffer[0];
+            
+            if(posType == POSITION_TYPE_BUY)
+            {
+               // Calculate profit in ATR units
+               double profitDistance = currentPrice - posOpenPrice;
+               double profitInATR = (currentATR > 0) ? (profitDistance / currentATR) : 0;
+               
+               // Progressively reduce TP distance as profit increases
+               // Start with full multiplier, reduce by 50% for each ATR unit of profit
+               double adjustedMultiplier = InpDynamicTP_ATRMultiplier;
+               if(profitInATR > 0)
+               {
+                  adjustedMultiplier = InpDynamicTP_ATRMultiplier * MathPow(0.50, profitInATR);
+                  // Don't go below 1.0 ATR distance (minimum target)
+                  adjustedMultiplier = MathMax(adjustedMultiplier, 1.0);
+               }
+               
+               double dynamicTPDistance = currentATR * adjustedMultiplier;
+               double dynamicTPLevel = currentPrice + dynamicTPDistance;
+               dynamicTPLevel = NormalizeDouble(MathCeil(dynamicTPLevel / tickSize) * tickSize, _Digits);
+               
+               // Only extend TP if new level is HIGHER than current TP (trailing behavior)
+               if(dynamicTPLevel > posTP && dynamicTPLevel > currentPrice)
+               {
+                  newTP = dynamicTPLevel;
+                  modified = true;
+               }
+            }
+            else // POSITION_TYPE_SELL
+            {
+               // Calculate profit in ATR units
+               double profitDistance = posOpenPrice - currentPrice;
+               double profitInATR = (currentATR > 0) ? (profitDistance / currentATR) : 0;
+               
+               // Progressively reduce TP distance as profit increases
+               double adjustedMultiplier = InpDynamicTP_ATRMultiplier;
+               if(profitInATR > 0)
+               {
+                  adjustedMultiplier = InpDynamicTP_ATRMultiplier * MathPow(0.50, profitInATR);
+                  adjustedMultiplier = MathMax(adjustedMultiplier, 1.0);
+               }
+               
+               double dynamicTPDistance = currentATR * adjustedMultiplier;
+               double dynamicTPLevel = currentPrice - dynamicTPDistance;
+               dynamicTPLevel = NormalizeDouble(MathFloor(dynamicTPLevel / tickSize) * tickSize, _Digits);
+               
+               // Only extend TP if new level is LOWER than current TP (trailing behavior)
+               if(dynamicTPLevel < posTP && dynamicTPLevel < currentPrice)
+               {
+                  newTP = dynamicTPLevel;
                   modified = true;
                }
             }
@@ -789,10 +1019,13 @@ void ManageTrailing()
       // Modify position if needed
       if(modified)
       {
-         // Use current SL/TP if not trailing that particular one
-         if(!InpEnableTrailingStop)
+         // Validate SL/TP were actually modified by trailing logic
+         // If no trailing method changed SL, keep original
+         if(newSL == posSL && !InpEnableTrailingStop && !InpEnableTrailingPSAR && !InpEnableTrailingMA)
             newSL = posSL;
-         if(!InpEnableTrailingTP)
+         
+         // If no trailing method changed TP, keep original
+         if(newTP == posTP && !InpEnableTrailingTP && !InpEnableDynamicATR_TP)
             newTP = posTP;
          
          if(g_Trade.PositionModify(ticket, newSL, newTP))
@@ -1423,7 +1656,7 @@ void CheckProfitSharingRule()
          qualificationMethod = DoubleToString(InpProfitConsistencyPct, 0) +  "% Profit Consistency Rule";
          qualified = true;
       }
-      else if(g_ProfitConsistencyPct >= 20.0 && g_ProfitConsistencyPct < 30.0 && totalProfit > 0)
+      else if(g_ProfitConsistencyPct >= 20.0 && g_ProfitConsistencyPct < 30.0 && InpProfitConsistencyPct > 20.0 && totalProfit > 0)
       {
          // 20% - 30% = 10% profit sharing
          payoutPct = 10.0;
