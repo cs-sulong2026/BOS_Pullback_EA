@@ -6,7 +6,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Cheruhaya Sulong"
 #property link      "https://www.mql5.com/en/users/cssulong"
-#property version   "1.20"
+#property version   "1.21"
 #property strict
 
 #property description "An Expert Advisor that identifies Supply and Demand zones based on volume and trades accordingly."
@@ -433,38 +433,38 @@ int OnInit()
       loG.Log("  Trading enabled with Magic Number: " + IntegerToString(InpMagicNumber));
    }
    
-   // Perform initial zone detection
-   if(InpDetectZoneByVolume)
-      loG.Info(" Starting volume-based zone detection...");
-   else
-      loG.Info(" Starting price action-based zone detection...");
+   // // Perform initial zone detection
+   // if(InpDetectZoneByVolume)
+   //    loG.Info(" Starting volume-based zone detection...");
+   // else
+   //    loG.Info(" Starting price action-based zone detection...");
    
-   if(InpDetectZoneByVolume)
-   {
-      // Use volume-based detection (original method)
-      if(!g_SDManager.DetectZones())
-      {
-         loG.Warning("Volume-based zone detection failed");
-      }
-      else
-      {
-         g_SDManager.ManageZoneDisplay();
+   // if(InpDetectZoneByVolume)
+   // {
+   //    // Use volume-based detection (original method)
+   //    if(!g_SDManager.DetectZones())
+   //    {
+   //       loG.Warning("Volume-based zone detection failed");
+   //    }
+   //    else
+   //    {
+   //       g_SDManager.ManageZoneDisplay();
 
-         loG.Info(" Volume-based zone detection complete:");
-         loG.Log("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
-         loG.Log("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
-      }
-   }
-   else
-   {
-      // Use price action-based detection (common practice method)
-      g_SDManager.DetectPriceActionZones();
-      g_SDManager.ManageZoneDisplay();
+   //       loG.Info(" Volume-based zone detection complete:");
+   //       loG.Log("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
+   //       loG.Log("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
+   //    }
+   // }
+   // else
+   // {
+   //    // Use price action-based detection (common practice method)
+   //    g_SDManager.DetectPriceActionZones();
+   //    g_SDManager.ManageZoneDisplay();
 
-      loG.Info("Price action zone detection complete:");
-      loG.Log("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
-      loG.Log("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
-   }
+   //    loG.Info("Price action zone detection complete:");
+   //    loG.Log("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
+   //    loG.Log("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
+   // }
    
    // Initialize tracking
    g_LastBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
@@ -525,7 +525,7 @@ int OnInit()
    Logging("  Zone Timeframe: " + EnumToString(InpZoneTimeframe));
    Logging("  Show zones: " + (InpShowZone == -1 ? "All" : (InpShowZone == 0 ? "None" : IntegerToString(InpShowZone) + " closest")));
    Logging("  Volume threshold: " + DoubleToString(volumeThreshold, 2));
-   Logging("  Auto Trading: " + (InpEnableTrailingStop ? "ENABLED" : "DISABLED"));
+   Logging("  Auto Trading: " + (InpEnableTrading ? "ENABLED" : "DISABLED"));
 
    EventSetTimer(1);
    
@@ -814,6 +814,8 @@ bool CheckDemandZoneEntry(CSupplyDemandZone *zone)
 //+------------------------------------------------------------------+
 void ManageTrailing()
 {
+   // bool isTouched = false;
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -972,106 +974,136 @@ void ManageTrailing()
       // Bollinger Bands Trailing Stop and TP Logic
       if(InpEnableTrailingBBands && g_BBandsHandle != INVALID_HANDLE)
       {
-         double upperBand[], lowerBand[], middleBand[];
-         ArraySetAsSeries(upperBand, true);
-         ArraySetAsSeries(lowerBand, true);
-         ArraySetAsSeries(middleBand, true);
+         int spread = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+         int stopLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+
+         // 0 - BASE_LINE, 1 - UPPER_BAND, 2 - LOWER_BAND
+         bool upperRange = (currentPrice >= GetBollingerBand(0) && currentPrice <= GetBollingerBand(1));
+         bool lowerRange = (currentPrice >= GetBollingerBand(2) && currentPrice <= GetBollingerBand(0));
+         bool overRange = (currentPrice > GetBollingerBand(1) || currentPrice < GetBollingerBand(2));
+         bool isTouched = (currentPrice >= GetBollingerBand(1) || currentPrice <= GetBollingerBand(2));
+
+         if(overRange)
+            continue; // No trailing outside bands
          
-         // Get all bands (BASE_LINE=0, UPPER_BAND=1, LOWER_BAND=2)
-         if(CopyBuffer(g_BBandsHandle, 0, 0, 2, middleBand) > 0 &&
-            CopyBuffer(g_BBandsHandle, 1, 0, 2, upperBand) > 0 && 
-            CopyBuffer(g_BBandsHandle, 2, 0, 2, lowerBand) > 0)
+         if(posType == POSITION_TYPE_BUY)
          {
-            int spread = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
-            int stopLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-            
-            if(posType == POSITION_TYPE_BUY)
+            double bandSL = 0.0;
+
+            if(upperRange)
             {
-               // For BUY: Use lower band [1] as trailing SL (avoid repainting)
-               double bbSL = lowerBand[1];
-               loG.Debug(" BB Lower Band[1]: " + DoubleToString(bbSL, _Digits));
-               
-               // Trail SL: only move higher, must be below current price
-               if(bbSL < currentPrice && bbSL > posSL)
+               if(isTouched)
+                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
+               else
+                  bandSL =  MathRound(GetBollingerBand(2)); // lower band
+            }
+            else if(lowerRange)
+            {
+               if(isTouched)
+                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
+               else
+                  bandSL =  MathRound(GetBollingerBand(2)); // lower band
+            }
+            // Trail SL: only move higher, must be below current price
+            if(bandSL < currentPrice && bandSL > posSL)
+            {
+               // Respect minimum stop level
+               if(currentPrice - bandSL >= stopLevel * point)
                {
-                  // Respect minimum stop level
-                  if(currentPrice - bbSL >= stopLevel * point)
+                  bandSL = NormalizeDouble(MathFloor(bandSL / tickSize) * tickSize, _Digits);
+                  if(bandSL > newSL)
                   {
-                     bbSL = NormalizeDouble(MathFloor(bbSL / tickSize) * tickSize, _Digits);
-                     if(bbSL > newSL)
-                     {
-                        newSL = bbSL;
-                        modified = true;
-                     }
-                  }
-               }
-               
-               // For BUY: Use middle band [1] as trailing TP (conservative target)
-               // Try using upper band [1] for more aggressive TP?
-               if(posTP > 0)
-               {
-                  double bbTP = upperBand[1];
-                  loG.Debug(" BB Upper Band[1]: " + DoubleToString(bbTP, _Digits));
-                  
-                  // Trail TP: only move higher, should be reasonable target
-                  if(bbTP > posTP)
-                  {
-                     // Ensure TP is above current price with minimum distance
-                     if(bbTP > currentPrice && (bbTP - currentPrice) >= stopLevel * point)
-                     {
-                        bbTP = NormalizeDouble(MathCeil(bbTP / tickSize) * tickSize, _Digits);
-                        if(bbTP > newTP)
-                        {
-                           newTP = bbTP;
-                           modified = true;
-                        }
-                     }
+                     newSL = bandSL;
+                     modified = true;
                   }
                }
             }
-            else // POSITION_TYPE_SELL
+            
+            if(posTP > 0)
             {
-               // For SELL: Use upper band [1] as trailing SL (avoid repainting)
-               double bbSL = upperBand[1] + (spread * point);
+               double bandTP = 0.0;
+
+               if(upperRange)
+                  bandTP =  MathRound(GetBollingerBand(1)); // upper band
+               else if(lowerRange)
+                  bandTP =  MathRound(GetBollingerBand(0)); // middle band
                
-               // Trail SL: only move lower, must be above current price
-               if(bbSL > currentPrice && (posSL == 0 || bbSL < posSL))
+               if(bandTP < posTP)
                {
-                  // Respect minimum stop level
-                  if(bbSL - currentPrice >= stopLevel * point)
+                  // Ensure TP is above current price with minimum distance
+                  if(bandTP > currentPrice && (bandTP - currentPrice) >= stopLevel * point)
                   {
-                     bbSL = NormalizeDouble(MathCeil(bbSL / tickSize) * tickSize, _Digits);
-                     if(posSL == 0 || bbSL < newSL)
+                     bandTP = NormalizeDouble(MathCeil(bandTP / tickSize) * tickSize, _Digits);
+                     if(bandTP > newTP)
                      {
-                        newSL = bbSL;
+                        newTP = bandTP;
                         modified = true;
-                     }
-                  }
-               }
-               
-               // For SELL: Use middle band [1] as trailing TP (conservative target)
-               // Try using lower band [0] for more aggressive TP?
-               if(posTP > 0)
-               {
-                  double bbTP = lowerBand[1];
-                  
-                  // Trail TP: only move lower, should be reasonable target
-                  if(bbTP < posTP)
-                  {
-                     // Ensure TP is below current price with minimum distance
-                     if(bbTP < currentPrice && (currentPrice - bbTP) >= stopLevel * point)
-                     {
-                        bbTP = NormalizeDouble(MathFloor(bbTP / tickSize) * tickSize, _Digits);
-                        if(posTP == 0 || bbTP < newTP)
-                        {
-                           newTP = bbTP;
-                           modified = true;
-                        }
                      }
                   }
                }
             }
          }
+         else // POSITION_TYPE_SELL
+         {
+            // For SELL: Use upper band [1] as trailing SL (avoid repainting)
+            double bandSL = 0.0;
+
+            if(upperRange)
+            {
+               if(isTouched)
+                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
+               else
+                  bandSL =  MathRound(GetBollingerBand(1)); // upper band
+            }
+            else if(lowerRange)
+            {
+               if(isTouched)
+                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
+               else
+                  bandSL =  MathRound(GetBollingerBand(1)); // upper band
+            }
+            
+            // Trail SL: only move lower, must be above current price
+            if(bandSL > currentPrice && bandSL < posSL)
+            {
+               // Respect minimum stop level
+               if(bandSL - currentPrice >= stopLevel * point)
+               {
+                  bandSL = NormalizeDouble(MathCeil(bandSL / tickSize) * tickSize, _Digits);
+                  if(posSL == 0 || bandSL < newSL)
+                  {
+                     newSL = bandSL;
+                     modified = true;
+                  }
+               }
+            }
+            
+            if(posTP > 0)
+            {
+               double bandTP = 0.0;
+
+               if(upperRange)
+                  bandTP =  MathRound(GetBollingerBand(0)); // middle band
+               else if(lowerRange)
+                  bandTP =  MathRound(GetBollingerBand(2)); // lower band
+               
+               // Trail TP: only move lower, should be reasonable target
+               if(bandTP > posTP)
+               {
+                  // Ensure TP is below current price with minimum distance
+                  if(bandTP < currentPrice && (currentPrice - bandTP) >= stopLevel * point)
+                  {
+                     bandTP = NormalizeDouble(MathFloor(bandTP / tickSize) * tickSize, _Digits);
+                     if(posTP == 0 || bandTP < newTP)
+                     {
+                        newTP = bandTP;
+                        modified = true;
+                     }
+                  }
+               }
+            }
+         }
+
       }
 
       // ATR-Based Dynamic TP Logic (Trailing - only extends, distance tightens with profit)
@@ -1232,12 +1264,13 @@ double GetBollingerBand(int bandType)
       return 0;
    
    double bandBuffer[];
+   // int amount = MathAbs(InpBBands_Shift) + 1;
    ArraySetAsSeries(bandBuffer, true);
    
-   if(CopyBuffer(g_BBandsHandle, bandType, 0, 5, bandBuffer) <= 0)
+   if(CopyBuffer(g_BBandsHandle, bandType, 0, 2, bandBuffer) <= 0)
       return 0;
    
-   return bandBuffer[0];
+   return bandBuffer[1];
 }
 
 //+------------------------------------------------------------------+
@@ -1350,9 +1383,9 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    {
       // loG.Info("  🟢 BUY order opened: Ticket: " + IntegerToString(g_Trade.ResultOrder()) + 
       //       " Entry: " + DoubleToString(price, _Digits) + " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
-      loG.Info("[BUY] Checking middle band: " + DoubleToString(GetBollingerBand(0), _Digits));
-      loG.Info("[BUY] Checking upper band: " + DoubleToString(GetBollingerBand(1), _Digits));
-      loG.Info("[BUY] Checking lower band: " + DoubleToString(GetBollingerBand(2), _Digits));
+      // loG.Info("[BUY] Checking middle band: " + DoubleToString(GetBollingerBand(0), _Digits));
+      // loG.Info("[BUY] Checking upper band: " + DoubleToString(GetBollingerBand(1), _Digits));
+      // loG.Info("[BUY] Checking lower band: " + DoubleToString(GetBollingerBand(2), _Digits));
       return true;
    }
    else
@@ -1413,14 +1446,108 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    {
       // loG.Info("  🔴 SELL order opened: Ticket: " + IntegerToString(g_Trade.ResultOrder()) +
       //       " Entry: " + DoubleToString(price, _Digits) + " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
-      loG.Info("[SELL] Checking middle band: " + DoubleToString(GetBollingerBand(0), _Digits));
-      loG.Info("[SELL] Checking upper band: " + DoubleToString(GetBollingerBand(1), _Digits));
-      loG.Info("[SELL] Checking lower band: " + DoubleToString(GetBollingerBand(2), _Digits));
+      // loG.Info("[SELL] Checking middle band: " + DoubleToString(GetBollingerBand(0), _Digits));
+      // loG.Info("[SELL] Checking upper band: " + DoubleToString(GetBollingerBand(1), _Digits));
+      // loG.Info("[SELL] Checking lower band: " + DoubleToString(GetBollingerBand(2), _Digits));
       return true;
    }
    else
    {
       loG.Error("[SELL] ERROR: Failed to open SELL - " + g_Trade.ResultRetcodeDescription());
+      return false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Open Buy Stop order                                              |
+//+------------------------------------------------------------------+
+bool PlaceBuyStop(CSupplyDemandZone *zone)
+{
+   if(zone == NULL || !InpEnableTrading || g_TradingDisabled)
+      return false;
+
+   double price = zone.GetTop();
+
+   // Get distance to set SL
+   double sl = zone.GetBottom();
+
+   // Get distance to set TP
+   double distance = zone.GetZoneSize() * 2.0;
+   double tp = price + distance;
+
+   // Check RCR before opening
+   if(InpEnableEvaluation)
+   {
+      double potentialRisk = MathAbs(price - sl) * InpLotSize * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      if(!CheckRiskConsistencyRule(_Symbol, POSITION_TYPE_BUY, potentialRisk))
+      {
+         loG.Warning("BUY STOP trade blocked - Risk Consistency Rule would be breached");
+         return false;
+      }
+   }
+
+   // Normalize prices
+   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   sl = NormalizeDouble(MathFloor(sl / tickSize) * tickSize, _Digits);
+   tp = NormalizeDouble(MathCeil(tp / tickSize) * tickSize, _Digits);
+   
+   string comment = StringFormat("%s_BUYSTOP_%.5f", InpTradeComment, price);
+   
+   if(g_Trade.BuyStop(InpLotSize, price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, comment))
+   {
+      loG.Info("[BUY STOP] Buy Stop order placed at " + DoubleToString(price, _Digits) +
+            " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
+      return true;
+   }
+   else
+   {
+      loG.Error("[BUY STOP] ERROR: Failed to place Buy Stop - " + g_Trade.ResultRetcodeDescription());
+      return false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Open Sell Stop order                                             |
+//+------------------------------------------------------------------+
+bool PlaceSellStop(CSupplyDemandZone *zone)
+{
+   if(zone == NULL || !InpEnableTrading || g_TradingDisabled)
+      return false;
+
+   double price = zone.GetBottom();
+   double sl = zone.GetTop();
+
+   // Get distance to set TP
+   double distance = zone.GetZoneSize() * 2.0;
+   double tp = price - distance;
+
+   // Check RCR before opening
+   if(InpEnableEvaluation)
+   {
+      double potentialRisk = MathAbs(price - sl) * InpLotSize * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      if(!CheckRiskConsistencyRule(_Symbol, POSITION_TYPE_SELL, potentialRisk))
+      {
+         loG.Warning("SELL STOP trade blocked - Risk Consistency Rule would be breached");
+         return false;
+      }
+   }
+
+   // Normalize prices
+   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   sl = NormalizeDouble(MathCeil(sl / tickSize) * tickSize, _Digits);
+   tp = NormalizeDouble(MathFloor(tp / tickSize) * tickSize, _Digits);
+   
+   string comment = StringFormat("%s_SELLSTOP_%.5f", InpTradeComment, price);
+   
+   if(g_Trade.SellStop(InpLotSize, price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, comment))
+   {
+      loG.Info("[SELL STOP] Sell Stop order placed at " + DoubleToString(price, _Digits) +
+            " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
+      return true;
+   }
+   else
+   {
+      loG.Error("[SELL STOP] ERROR: Failed to place Sell Stop - " + g_Trade.ResultRetcodeDescription());
       return false;
    }
 }
@@ -2404,9 +2531,9 @@ void CreateEvaluationDisplay()
       g_label[i].Font("Microsoft Sans Serif");
       g_label[i].Corner(CORNER_LEFT_LOWER);
 
-      if(g_TradingDisabled && i == 1)
+      if((g_TradingDisabled || g_DLB_WarningShown || !InpEnableTrading) && i == 1)
          g_label[i].Color(clrRed);
-      else if(!g_TradingDisabled && i == 1)
+      else if((!g_TradingDisabled || !g_DLB_WarningShown || InpEnableTrading) && i == 1)
          g_label[i].Color(clrLime);
    }
 
@@ -2482,7 +2609,9 @@ void UpdateEvaluationDisplay()
       maxRCRPct = MathMax(buyRiskPct, sellRiskPct);
    }
    
-   string statusText = g_TradingDisabled ? "DISABLED" : "ACTIVE";
+   string statusText = (g_TradingDisabled || !InpEnableTrading) ? "DISABLED" : "ACTIVE";
+   if(!InpEnableProfitConsistencyRule)
+      statusText = g_DLB_WarningShown ? "DLB WARNING" : statusText;
    
    // Calculate Profit Consistency (best day / total profit)
    double totalProfit = 0.0;
