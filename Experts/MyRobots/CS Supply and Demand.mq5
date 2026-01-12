@@ -1,13 +1,17 @@
 //+------------------------------------------------------------------+
 //|                                       CS Supply and Demand.mq5   |
-//|                                 Copyright 2025, Cheruhaya Sulong |
+//|                          Copyright © 2025-2026, Cheruhaya Sulong |
 //|                           https://www.mql5.com/en/users/cssulong |
 //| 07.01.2026 - Volume-based Supply & Demand EA                     |
 //+------------------------------------------------------------------+
-#property copyright "Copyright 2025, Cheruhaya Sulong"
+#property copyright "Cheruhaya Sulong"
 #property link      "https://www.mql5.com/en/users/cssulong"
 #property version   "1.20"
 #property strict
+
+#property description "An Expert Advisor that identifies Supply and Demand zones based on volume and trades accordingly."
+#property description "Includes advanced trailing stop mechanisms using ATR, Bollinger Bands, PSAR, and Moving Averages."
+#property description "WARNING: There is no guarantee that the expert advisor will work as intended. Use at your own risk."
 
 // Include the Supply & Demand classes
 #include "SupplyDemand.mqh"
