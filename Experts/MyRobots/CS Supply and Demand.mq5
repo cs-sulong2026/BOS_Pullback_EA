@@ -96,6 +96,7 @@ input bool              InpAutoVolumeThreshold = true;         // Auto Calculate
 input double            InpVolumeMultiplier = 1.5;             // Volume Multiplier (for auto calc)
 input bool              InpUpdateOnNewBar = true;              // Update Zones on New Bar
 input int               InpUpdateIntervalSec = 300;            // Update Interval (seconds)
+input bool              InpEnableZonePersistence = true;       // Enable Zone Persistence (save/load zones)
 input bool              InpDebugMode = false;                  // Enable Debug Logging
 input bool              InpSilentLogging = false;              // Silent Logging (no console output)
 input bool              InpDeleteFolder = false;               // Delete log folder on EA removal (Temporary)
@@ -131,6 +132,7 @@ bool g_TradingDisabled = false;         // Trading disabled flag
 datetime g_LastResetTime = 0;           // Last daily reset time
 string g_DisplayLabel = "SD_Eval";      // Chart label name
 string g_FileName = "";                 // Data file name (set in OnInit)
+string g_ZonesFileName = "";            // Zones file name (set in OnInit)
 
 //--- Daily snapshot tracking
 double g_DailyStartingEquity = 0;       // Starting equity for the day
@@ -285,6 +287,7 @@ int OnInit()
    
    acc_login = (int)account.Login();
    g_FileName = "\\SnD_Data_" + IntegerToString(acc_login) + ".dat";
+   g_ZonesFileName = "\\SnD_Zones_" + _Symbol + "_" + IntegerToString(acc_login) + ".dat";
    
    if(!loG.Initialize("SnD_Logs", "SnD", acc_login, account.Server(), false))
    {
@@ -340,6 +343,21 @@ int OnInit()
                                  InpDemandColorFill, InpZoneTransparency, 
                                  InpShowLabels);
    g_SDManager.SetEnableTradeOnWeakZone(InpEnableTradeOnWeakZone);
+   
+   // Load existing zones from file if persistence is enabled
+   if(InpEnableZonePersistence)
+   {
+      string workFolder = loG.GetWorkFolder();
+      if(g_SDManager.LoadZonesFromFile(workFolder + g_ZonesFileName))
+      {
+         loG.Info("  Successfully loaded zones from previous session");
+         loG.Info("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()) + " | Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
+      }
+      else
+      {
+         loG.Info("  No existing zones file found - will detect zones fresh");
+      }
+   }
    
    // Initialize trading
    if(InpEnableTrading)
@@ -432,40 +450,7 @@ int OnInit()
       
       loG.Log("  Trading enabled with Magic Number: " + IntegerToString(InpMagicNumber));
    }
-   
-   // // Perform initial zone detection
-   // if(InpDetectZoneByVolume)
-   //    loG.Info(" Starting volume-based zone detection...");
-   // else
-   //    loG.Info(" Starting price action-based zone detection...");
-   
-   // if(InpDetectZoneByVolume)
-   // {
-   //    // Use volume-based detection (original method)
-   //    if(!g_SDManager.DetectZones())
-   //    {
-   //       loG.Warning("Volume-based zone detection failed");
-   //    }
-   //    else
-   //    {
-   //       g_SDManager.ManageZoneDisplay();
-
-   //       loG.Info(" Volume-based zone detection complete:");
-   //       loG.Log("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
-   //       loG.Log("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
-   //    }
-   // }
-   // else
-   // {
-   //    // Use price action-based detection (common practice method)
-   //    g_SDManager.DetectPriceActionZones();
-   //    g_SDManager.ManageZoneDisplay();
-
-   //    loG.Info("Price action zone detection complete:");
-   //    loG.Log("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
-   //    loG.Log("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
-   // }
-   
+      
    // Initialize tracking
    g_LastBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
    g_LastUpdateTime = TimeCurrent();
@@ -537,6 +522,14 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   // Save zones before cleanup if persistence is enabled
+   if(InpEnableZonePersistence && g_SDManager != NULL && loG != NULL)
+   {
+      string workFolder = loG.GetWorkFolder();
+      g_SDManager.SaveZonesToFile(workFolder + g_ZonesFileName);
+      loG.Info("Zones saved to file on EA shutdown");
+   }
+   
    // Cleanup logger
    if(loG != NULL)
    {
@@ -659,6 +652,16 @@ void OnTick()
       // Update all zones (state management, extension, cleanup)
       g_SDManager.UpdateAllZones();
       g_SDManager.ManageZoneDisplay();
+      
+      // Save zones to file if persistence is enabled
+      if(InpEnableZonePersistence)
+      {
+         string workFolder = loG.GetWorkFolder();
+         if(!g_SDManager.SaveZonesToFile(workFolder + g_ZonesFileName))
+         {
+            loG.Warning("Failed to save zones to file");
+         }
+      }
    }
    
    // Manage trailing stops and TPs
@@ -2609,7 +2612,7 @@ void UpdateEvaluationDisplay()
       maxRCRPct = MathMax(buyRiskPct, sellRiskPct);
    }
    
-   string statusText = (g_TradingDisabled || !InpEnableTrading) ? "DISABLED" : "ACTIVE";
+   string statusText = (g_TradingDisabled || !InpEnableTrading) ? "  DISABLED" : "   ACTIVE";
    if(!InpEnableProfitConsistencyRule)
       statusText = g_DLB_WarningShown ? "DLB WARNING" : statusText;
    
@@ -2641,7 +2644,7 @@ void UpdateEvaluationDisplay()
    
    // Line by line text 
    g_label[0].Description("EVALUATION STATUS");
-   g_label[1].Description("             " + statusText);
+   g_label[1].Description("          " + statusText);
    g_label[2].Description(StringFormat("Equity: $%.2f", equity));
    g_label[3].Description(StringFormat("Balance: $%.2f", balance));
    g_label[4].Description(StringFormat("DLL: $%.2f / $%.2f (%.1f%%)", dailyRemaining, dailyLossAllowed, (dailyRemaining / dailyLossAllowed * 100.0)));
@@ -2679,6 +2682,10 @@ bool CreateCustomChart()
    ResetLastError();
 
    if(!g_Chart.ScaleFix(true))
+      return false;
+   else if(!g_Chart.Shift(true))
+      return false;
+   else if(!g_Chart.ShiftSize(50))
       return false;
    else if(!g_Chart.ShowLineAsk(true))
       return false;

@@ -9,8 +9,10 @@
 
 //--- Forward declarations for trade functions (implemented in .mq5)
 class CSupplyDemandZone;  // Forward declare class
-bool OpenBuyTrade(CSupplyDemandZone *zone);   // Demand zone entry
-bool OpenSellTrade(CSupplyDemandZone *zone);  // Supply zone entry
+bool OpenBuyTrade(CSupplyDemandZone *zone);     // Demand zone entry
+bool PlaceSellStop(CSupplyDemandZone *zone);     // Demand zone breakout stop entry
+bool OpenSellTrade(CSupplyDemandZone *zone);    // Supply zone entry
+bool PlaceBuyStop(CSupplyDemandZone *zone);      // Supply zone breakout stop entry
 
 //--- Enumerations
 enum ENUM_SD_ZONE_TYPE
@@ -266,10 +268,11 @@ bool CSupplyDemandZone::IsPriceTouching(double price, double tolerance)
 //+------------------------------------------------------------------+
 bool CSupplyDemandZone::HasPriceBroken(double price)
 {
+   double touchRange = GetZoneSize() * 0.05; // 5% of zone size
    if(m_zone.type == SD_ZONE_SUPPLY)
-      return (price > m_zone.priceTop);
+      return (price > m_zone.priceTop + touchRange);
    else
-      return (price < m_zone.priceBottom);
+      return (price < m_zone.priceBottom - touchRange);
 }
 
 //+------------------------------------------------------------------+
@@ -368,7 +371,7 @@ void CSupplyDemandZone::DrawLabel()
       else
          volumeText = IntegerToString(m_zone.volumeTotal);
       
-      labelText = StringFormat("%s \nVol: %s \nAvg: %.0f", stateText, volumeText, m_zone.volumeAvg);
+      labelText = StringFormat("%s  Vol: %s  Avg: %.0f", stateText, volumeText, m_zone.volumeAvg);
    }
    
    ObjectSetString(m_chartID, m_zone.labelName, OBJPROP_TEXT, labelText);
@@ -570,6 +573,10 @@ public:
    int               GetDemandZoneCount() const { return ArraySize(m_demandZones); }
    CSupplyDemandZone* GetClosestSupplyZone(double price);
    CSupplyDemandZone* GetClosestDemandZone(double price);
+   
+   // Persistence
+   bool              SaveZonesToFile(string fileName);
+   bool              LoadZonesFromFile(string fileName);
    
    // Cleanup
    void              DeleteAllZones();
@@ -1141,8 +1148,21 @@ void CSupplyDemandManager::UpdateAllZones()
          m_supplyZones[i].UpdateDistanceToPrice(currentPrice);
          
          // Check zone state based on S&D rules
+         // if(m_supplyZones[i].IsPriceInZone(currentPrice))
+         // {
+         //    if(!m_supplyZones[i].GetZoneData().priceHasLeft)
+         //    {
+         //       // long volume = m_supplyZones[i].GetVolume();
+
+         //       // if(m_supplyZones[i].GetVolume() >= 4000)
+         //       //    PlaceBuyStop(m_supplyZones[i]);
+
+         //       // m_supplyZones[i].SetState(SD_STATE_BROKEN);
+         //    }
+         // }
          if(m_supplyZones[i].HasPriceBroken(currentPrice))
          {
+
             // Zone is broken - delete it
             // Print("[HasPriceBroken] SUPPLY " + IntegerToString(i+1) + " - DELETING");
             delete m_supplyZones[i];
@@ -1279,8 +1299,21 @@ void CSupplyDemandManager::UpdateAllZones()
          m_demandZones[i].UpdateDistanceToPrice(currentPrice);
          
          // Check zone state based on S&D rules
+         // if(m_demandZones[i].IsPriceInZone(currentPrice))
+         // {
+         //    if(!m_demandZones[i].GetZoneData().priceHasLeft)
+         //    {
+         //       long volume = m_demandZones[i].GetVolume();
+
+         //       // if(volume >= 4000)
+         //       //    PlaceSellStop(m_demandZones[i]);
+
+         //       // m_demandZones[i].SetState(SD_STATE_BROKEN);
+         //    }
+         // }
          if(m_demandZones[i].HasPriceBroken(currentPrice))
          {
+
             // Zone is broken - delete it
             // Print("[HasPriceBroken] DEMAND ", i+1, " - DELETING");
             delete m_demandZones[i];
@@ -1955,3 +1988,210 @@ void CSupplyDemandManager::ReindexDemandZones()
       }
    }
 }
+
+//+------------------------------------------------------------------+
+//| Save zones to binary file                                        |
+//+------------------------------------------------------------------+
+bool CSupplyDemandManager::SaveZonesToFile(string fileName)
+{
+   int handle = FileOpen(fileName, FILE_WRITE | FILE_BIN);
+   if(handle == INVALID_HANDLE)
+   {
+      Print("[ZONES] Failed to open zones file for writing: ", fileName, " Error: ", GetLastError());
+      return false;
+   }
+   
+   // Write file version
+   int version = 1;
+   FileWriteInteger(handle, version, INT_VALUE);
+   
+   // Write supply zones count and data
+   int supplyCount = ArraySize(m_supplyZones);
+   FileWriteInteger(handle, supplyCount, INT_VALUE);
+   
+   for(int i = 0; i < supplyCount; i++)
+   {
+      if(m_supplyZones[i] != NULL)
+      {
+         SSupplyDemandZone zoneData = m_supplyZones[i].GetZoneData();
+         
+         // Write zone structure fields
+         FileWriteInteger(handle, (int)zoneData.type, INT_VALUE);
+         FileWriteInteger(handle, (int)zoneData.state, INT_VALUE);
+         FileWriteDouble(handle, zoneData.priceTop);
+         FileWriteDouble(handle, zoneData.priceBottom);
+         FileWriteLong(handle, (long)zoneData.timeStart);
+         FileWriteLong(handle, (long)zoneData.timeEnd);
+         FileWriteLong(handle, zoneData.volumeTotal);
+         FileWriteDouble(handle, zoneData.volumeAvg);
+         FileWriteInteger(handle, zoneData.zoneIndex, INT_VALUE);
+         FileWriteInteger(handle, zoneData.barsInZone, INT_VALUE);
+         FileWriteInteger(handle, zoneData.touchCount, INT_VALUE);
+         FileWriteInteger(handle, zoneData.isValid ? 1 : 0, INT_VALUE);
+         FileWriteDouble(handle, zoneData.distanceToPrice);
+         FileWriteInteger(handle, zoneData.priceHasLeft ? 1 : 0, INT_VALUE);
+      }
+   }
+   
+   // Write demand zones count and data
+   int demandCount = ArraySize(m_demandZones);
+   FileWriteInteger(handle, demandCount, INT_VALUE);
+   
+   for(int i = 0; i < demandCount; i++)
+   {
+      if(m_demandZones[i] != NULL)
+      {
+         SSupplyDemandZone zoneData = m_demandZones[i].GetZoneData();
+         
+         // Write zone structure fields
+         FileWriteInteger(handle, (int)zoneData.type, INT_VALUE);
+         FileWriteInteger(handle, (int)zoneData.state, INT_VALUE);
+         FileWriteDouble(handle, zoneData.priceTop);
+         FileWriteDouble(handle, zoneData.priceBottom);
+         FileWriteLong(handle, (long)zoneData.timeStart);
+         FileWriteLong(handle, (long)zoneData.timeEnd);
+         FileWriteLong(handle, zoneData.volumeTotal);
+         FileWriteDouble(handle, zoneData.volumeAvg);
+         FileWriteInteger(handle, zoneData.zoneIndex, INT_VALUE);
+         FileWriteInteger(handle, zoneData.barsInZone, INT_VALUE);
+         FileWriteInteger(handle, zoneData.touchCount, INT_VALUE);
+         FileWriteInteger(handle, zoneData.isValid ? 1 : 0, INT_VALUE);
+         FileWriteDouble(handle, zoneData.distanceToPrice);
+         FileWriteInteger(handle, zoneData.priceHasLeft ? 1 : 0, INT_VALUE);
+      }
+   }
+   
+   FileClose(handle);
+   // Print("[ZONES] Successfully saved ", supplyCount, " supply zones and ", demandCount, " demand zones to file");
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Load zones from binary file                                      |
+//+------------------------------------------------------------------+
+bool CSupplyDemandManager::LoadZonesFromFile(string fileName)
+{
+   if(!FileIsExist(fileName))
+   {
+      Print("[ZONES] Zones file not found: ", fileName);
+      return false;
+   }
+   
+   int handle = FileOpen(fileName, FILE_READ | FILE_BIN);
+   if(handle == INVALID_HANDLE)
+   {
+      Print("[ZONES] Failed to open zones file for reading: ", fileName, " Error: ", GetLastError());
+      return false;
+   }
+   
+   // Read file version
+   int version = FileReadInteger(handle, INT_VALUE);
+   if(version != 1)
+   {
+      Print("[ZONES] Unsupported zones file version: ", version);
+      FileClose(handle);
+      return false;
+   }
+   
+   // Clear existing zones before loading
+   DeleteAllZones();
+   
+   // Read supply zones
+   int supplyCount = FileReadInteger(handle, INT_VALUE);
+   
+   for(int i = 0; i < supplyCount; i++)
+   {
+      // Read zone structure fields
+      ENUM_SD_ZONE_TYPE type = (ENUM_SD_ZONE_TYPE)FileReadInteger(handle, INT_VALUE);
+      ENUM_SD_ZONE_STATE state = (ENUM_SD_ZONE_STATE)FileReadInteger(handle, INT_VALUE);
+      double priceTop = FileReadDouble(handle);
+      double priceBottom = FileReadDouble(handle);
+      datetime timeStart = (datetime)FileReadLong(handle);
+      datetime timeEnd = (datetime)FileReadLong(handle);
+      long volumeTotal = FileReadLong(handle);
+      double volumeAvg = FileReadDouble(handle);
+      int zoneIndex = FileReadInteger(handle, INT_VALUE);
+      int barsInZone = FileReadInteger(handle, INT_VALUE);
+      int touchCount = FileReadInteger(handle, INT_VALUE);
+      bool isValid = (FileReadInteger(handle, INT_VALUE) != 0);
+      double distanceToPrice = FileReadDouble(handle);
+      bool priceHasLeft = (FileReadInteger(handle, INT_VALUE) != 0);
+      
+      // Create and add zone
+      CSupplyDemandZone *zone = new CSupplyDemandZone();
+      if(zone != NULL)
+      {
+         zone.Create(type, zoneIndex, priceTop, priceBottom, timeStart, volumeTotal, volumeAvg, barsInZone);
+         zone.SetState(state);
+         zone.SetValid(isValid);
+         zone.SetPriceHasLeft(priceHasLeft);
+         zone.SetVisualSettings(m_supplyColor, m_demandColor, m_supplyColorFill, 
+                                m_demandColorFill, 85, m_showLabels);
+         zone.ExtendZone(timeEnd);
+         
+         // Set touch count manually (no setter exists)
+         for(int t = 0; t < touchCount; t++)
+            zone.IncrementTouch();
+         
+         // Add to array
+         int size = ArraySize(m_supplyZones);
+         ArrayResize(m_supplyZones, size + 1);
+         m_supplyZones[size] = zone;
+         
+         // Draw the zone
+         zone.Draw();
+      }
+   }
+   
+   // Read demand zones
+   int demandCount = FileReadInteger(handle, INT_VALUE);
+   
+   for(int i = 0; i < demandCount; i++)
+   {
+      // Read zone structure fields
+      ENUM_SD_ZONE_TYPE type = (ENUM_SD_ZONE_TYPE)FileReadInteger(handle, INT_VALUE);
+      ENUM_SD_ZONE_STATE state = (ENUM_SD_ZONE_STATE)FileReadInteger(handle, INT_VALUE);
+      double priceTop = FileReadDouble(handle);
+      double priceBottom = FileReadDouble(handle);
+      datetime timeStart = (datetime)FileReadLong(handle);
+      datetime timeEnd = (datetime)FileReadLong(handle);
+      long volumeTotal = FileReadLong(handle);
+      double volumeAvg = FileReadDouble(handle);
+      int zoneIndex = FileReadInteger(handle, INT_VALUE);
+      int barsInZone = FileReadInteger(handle, INT_VALUE);
+      int touchCount = FileReadInteger(handle, INT_VALUE);
+      bool isValid = (FileReadInteger(handle, INT_VALUE) != 0);
+      double distanceToPrice = FileReadDouble(handle);
+      bool priceHasLeft = (FileReadInteger(handle, INT_VALUE) != 0);
+      
+      // Create and add zone
+      CSupplyDemandZone *zone = new CSupplyDemandZone();
+      if(zone != NULL)
+      {
+         zone.Create(type, zoneIndex, priceTop, priceBottom, timeStart, volumeTotal, volumeAvg, barsInZone);
+         zone.SetState(state);
+         zone.SetValid(isValid);
+         zone.SetPriceHasLeft(priceHasLeft);
+         zone.SetVisualSettings(m_supplyColor, m_demandColor, m_supplyColorFill, 
+                                m_demandColorFill, 85, m_showLabels);
+         zone.ExtendZone(timeEnd);
+         
+         // Set touch count manually (no setter exists)
+         for(int t = 0; t < touchCount; t++)
+            zone.IncrementTouch();
+         
+         // Add to array
+         int size = ArraySize(m_demandZones);
+         ArrayResize(m_demandZones, size + 1);
+         m_demandZones[size] = zone;
+         
+         // Draw the zone
+         zone.Draw();
+      }
+   }
+   
+   FileClose(handle);
+   // Print("[ZONES] Successfully loaded ", supplyCount, " supply zones and ", demandCount, " demand zones from file");
+   return true;
+}
+
