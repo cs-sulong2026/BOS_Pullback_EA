@@ -6,7 +6,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Cheruhaya Sulong"
 #property link      "https://www.mql5.com/en/users/cssulong"
-#property version   "1.21"
+#property version   "1.22"
 #property strict
 
 #property description "An Expert Advisor that identifies Supply and Demand zones based on volume and trades accordingly."
@@ -29,6 +29,7 @@ input bool              InpEnableLotSizeValidation = false;    // Enable Lot Siz
 input double            InpInitialBalance = 10000.0;           // Initial account balance for calculations
 // Evaluation Rules Toggle
 input bool              InpEnableProfitConsistencyRule = true; // Enable Profit Consistency Rule (if disabled, DLB applies automatically)
+input bool              InpEnableDLBRule = true;               // Enable DLB Rule
 input double            InpDailyLossBreachedPct = 1.0;         // Daily Loss Breached percentage (for payout calculation)
 input double            InpRiskConsistencyPct = 2.0;           // Risk Consistency Rule percentage per trade idea
 input double            InpDailyLossLimitPct = 5.0;            // Daily loss limit percentage
@@ -36,6 +37,7 @@ input double            InpMaxLossLimitPct = 10.0;             // Maximum loss l
 // Profit Sharing Rules
 input double            InpProfitTargetPct = 10.0;             // Profit Target percentage
 input double            InpProfitConsistencyPct = 20.0;        // Profit Consistency Rule percentage
+input bool              InpEnableFirstRewardOnDemand = false;  // Enable First Reward on Demand (3% profit, 3 days, 0.5% daily)
 
 input group "=== Zone Detection Settings ==="
 input int               InpLookbackBars = 500;                 // Lookback Period (bars)
@@ -96,6 +98,7 @@ input bool              InpAutoVolumeThreshold = true;         // Auto Calculate
 input double            InpVolumeMultiplier = 1.5;             // Volume Multiplier (for auto calc)
 input bool              InpUpdateOnNewBar = true;              // Update Zones on New Bar
 input int               InpUpdateIntervalSec = 300;            // Update Interval (seconds)
+input bool              InpEnableZonePersistence = true;       // Enable Zone Persistence (save/load zones)
 input bool              InpDebugMode = false;                  // Enable Debug Logging
 input bool              InpSilentLogging = false;              // Silent Logging (no console output)
 input bool              InpDeleteFolder = false;               // Delete log folder on EA removal (Temporary)
@@ -125,12 +128,14 @@ int   acc_login = 0;                    // Account login (set in OnInit)
 double g_DailyLossThreshold = 0;        // DLL threshold value (resets daily)
 double g_MaxLossThreshold = 0;          // MLL threshold value (permanent)
 double g_DLBThreshold = 0;              // Daily Loss Breach threshold (for payout calculation)
+int g_DLLCount = 0;                     // Daily Loss Limit breach counter
 int g_DLBCount = 0;                     // Daily Loss Breach counter
 int g_RCRCount = 0;                     // Risk Consistency Rule breach counter
 bool g_TradingDisabled = false;         // Trading disabled flag
 datetime g_LastResetTime = 0;           // Last daily reset time
 string g_DisplayLabel = "SD_Eval";      // Chart label name
 string g_FileName = "";                 // Data file name (set in OnInit)
+string g_ZonesFileName = "";            // Zones file name (set in OnInit)
 
 //--- Daily snapshot tracking
 double g_DailyStartingEquity = 0;       // Starting equity for the day
@@ -285,6 +290,7 @@ int OnInit()
    
    acc_login = (int)account.Login();
    g_FileName = "\\SnD_Data_" + IntegerToString(acc_login) + ".dat";
+   g_ZonesFileName = "\\SnD_Zones_" + _Symbol + "_" + IntegerToString(acc_login) + ".dat";
    
    if(!loG.Initialize("SnD_Logs", "SnD", acc_login, account.Server(), false))
    {
@@ -340,6 +346,21 @@ int OnInit()
                                  InpDemandColorFill, InpZoneTransparency, 
                                  InpShowLabels);
    g_SDManager.SetEnableTradeOnWeakZone(InpEnableTradeOnWeakZone);
+   
+   // Load existing zones from file if persistence is enabled
+   if(InpEnableZonePersistence)
+   {
+      string workFolder = loG.GetWorkFolder();
+      if(g_SDManager.LoadZonesFromFile(workFolder + g_ZonesFileName))
+      {
+         loG.Info("  Successfully loaded zones from previous session");
+         loG.Info("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()) + " | Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
+      }
+      else
+      {
+         loG.Info("  No existing zones file found - will detect zones fresh");
+      }
+   }
    
    // Initialize trading
    if(InpEnableTrading)
@@ -432,40 +453,7 @@ int OnInit()
       
       loG.Log("  Trading enabled with Magic Number: " + IntegerToString(InpMagicNumber));
    }
-   
-   // // Perform initial zone detection
-   // if(InpDetectZoneByVolume)
-   //    loG.Info(" Starting volume-based zone detection...");
-   // else
-   //    loG.Info(" Starting price action-based zone detection...");
-   
-   // if(InpDetectZoneByVolume)
-   // {
-   //    // Use volume-based detection (original method)
-   //    if(!g_SDManager.DetectZones())
-   //    {
-   //       loG.Warning("Volume-based zone detection failed");
-   //    }
-   //    else
-   //    {
-   //       g_SDManager.ManageZoneDisplay();
-
-   //       loG.Info(" Volume-based zone detection complete:");
-   //       loG.Log("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
-   //       loG.Log("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
-   //    }
-   // }
-   // else
-   // {
-   //    // Use price action-based detection (common practice method)
-   //    g_SDManager.DetectPriceActionZones();
-   //    g_SDManager.ManageZoneDisplay();
-
-   //    loG.Info("Price action zone detection complete:");
-   //    loG.Log("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
-   //    loG.Log("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
-   // }
-   
+      
    // Initialize tracking
    g_LastBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
    g_LastUpdateTime = TimeCurrent();
@@ -537,6 +525,14 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   // Save zones before cleanup if persistence is enabled
+   if(InpEnableZonePersistence && g_SDManager != NULL && loG != NULL)
+   {
+      string workFolder = loG.GetWorkFolder();
+      g_SDManager.SaveZonesToFile(workFolder + g_ZonesFileName);
+      loG.Info("Zones saved to file on EA shutdown");
+   }
+   
    // Cleanup logger
    if(loG != NULL)
    {
@@ -659,6 +655,16 @@ void OnTick()
       // Update all zones (state management, extension, cleanup)
       g_SDManager.UpdateAllZones();
       g_SDManager.ManageZoneDisplay();
+      
+      // Save zones to file if persistence is enabled
+      if(InpEnableZonePersistence)
+      {
+         string workFolder = loG.GetWorkFolder();
+         if(!g_SDManager.SaveZonesToFile(workFolder + g_ZonesFileName))
+         {
+            loG.Warning("Failed to save zones to file");
+         }
+      }
    }
    
    // Manage trailing stops and TPs
@@ -827,7 +833,13 @@ void ManageTrailing()
       
       if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber)
          continue;
-      
+
+      // Check open time needs to over a minimum time (to avoid immediate adjustments)
+      datetime posOpenTime = (datetime)PositionGetInteger(POSITION_TIME);
+      int minOpenSeconds = 120; // Minimum 1 minute open time before trailing
+      if(TimeCurrent() - posOpenTime < minOpenSeconds)
+         continue;
+
       ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
       double posSL = PositionGetDouble(POSITION_SL);
@@ -978,6 +990,13 @@ void ManageTrailing()
          int stopLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
 
          // 0 - BASE_LINE, 1 - UPPER_BAND, 2 - LOWER_BAND
+         double middleBand = GetBollingerBand(0);
+         double upperBand = GetBollingerBand(1);
+         double lowerBand = GetBollingerBand(2);
+
+         double prevUpperBand = GetBollingerBand(1, 1);
+         double prevLowerBand = GetBollingerBand(2, 1);
+
          bool upperRange = (currentPrice >= GetBollingerBand(0) && currentPrice <= GetBollingerBand(1));
          bool lowerRange = (currentPrice >= GetBollingerBand(2) && currentPrice <= GetBollingerBand(0));
          bool overRange = (currentPrice > GetBollingerBand(1) || currentPrice < GetBollingerBand(2));
@@ -989,92 +1008,124 @@ void ManageTrailing()
          if(posType == POSITION_TYPE_BUY)
          {
             double bandSL = 0.0;
+            double atr = GetATR();
 
-            if(upperRange)
+            if(prevLowerBand > lowerBand)
             {
-               if(isTouched)
-                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
-               else
-                  bandSL =  MathRound(GetBollingerBand(2)); // lower band
-            }
-            else if(lowerRange)
-            {
-               if(isTouched)
-                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
-               else
-                  bandSL =  MathRound(GetBollingerBand(2)); // lower band
-            }
-            // Trail SL: only move higher, must be below current price
-            if(bandSL < currentPrice && bandSL > posSL)
-            {
-               // Respect minimum stop level
-               if(currentPrice - bandSL >= stopLevel * point)
+               if(lowerRange && !overRange)
                {
-                  bandSL = NormalizeDouble(MathFloor(bandSL / tickSize) * tickSize, _Digits);
-                  if(bandSL > newSL)
-                  {
-                     newSL = bandSL;
-                     modified = true;
-                  }
+                  bandSL =  MathRound(GetBollingerBand(2)); // lower band   
+                  bandSL = NormalizeDouble(bandSL + atr/2, _Digits); // add ATR buffer
+                  // Print("Expanding bands - BUY SL set to lower band + ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+               else if(upperRange && (middleBand + atr/2 < currentPrice))
+               {
+                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
+                  bandSL = NormalizeDouble(bandSL + atr/2, _Digits); // add ATR buffer
+                  // Print("Expanding bands - BUY SL set to middle band + ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+            }
+            else if(prevLowerBand < lowerBand)
+            {
+               if(lowerRange && !overRange)
+               {
+                  bandSL =  MathRound(GetBollingerBand(2)); // lower band
+                  bandSL = NormalizeDouble(bandSL - atr/2, _Digits); // subtract ATR buffer
+                  // Print("Contracting bands - BUY SL set to lower band - ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+               else if(upperRange && (middleBand - atr/2 < currentPrice))
+               {
+                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
+                  bandSL = NormalizeDouble(bandSL - atr/2, _Digits); // subtract ATR buffer
+                  // Print("Contracting bands - BUY SL set to middle band - ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+            }
+
+            // Trail SL: only move higher, must be below current price
+            if(bandSL < currentPrice && (currentPrice - bandSL >= stopLevel * point))
+            {
+               bandSL = NormalizeDouble(MathFloor(bandSL / tickSize) * tickSize, _Digits);
+               if(bandSL > newSL)
+               {
+                  newSL = bandSL;
+                  modified = true;
                }
             }
             
             if(posTP > 0)
             {
                double bandTP = 0.0;
+               double atr = GetATR();
 
-               if(upperRange)
-                  bandTP =  MathRound(GetBollingerBand(1)); // upper band
-               else if(lowerRange)
-                  bandTP =  MathRound(GetBollingerBand(0)); // middle band
-               
-               if(bandTP < posTP)
+               if(prevLowerBand < lowerBand)
                {
-                  // Ensure TP is above current price with minimum distance
-                  if(bandTP > currentPrice && (bandTP - currentPrice) >= stopLevel * point)
+                  // Contracting bands - use upper band
+                  bandTP =  MathRound(GetBollingerBand(1)); // upper band
+                  bandTP = NormalizeDouble(bandTP - atr/2, _Digits); // subtract ATR buffer
+               }
+               else if(prevLowerBand > lowerBand)
+               {
+                  // Expanding bands - use upper band
+                  bandTP =  MathRound(GetBollingerBand(1)); // upper band
+                  bandTP = NormalizeDouble(bandTP + atr, _Digits); // add ATR buffer
+               }
+
+               // Ensure TP is above current price with minimum distance
+               if(bandTP > currentPrice && (bandTP - currentPrice) >= stopLevel * point)
+               {
+                  bandTP = NormalizeDouble(MathCeil(bandTP / tickSize) * tickSize, _Digits);
+                  if(bandTP != newTP)
                   {
-                     bandTP = NormalizeDouble(MathCeil(bandTP / tickSize) * tickSize, _Digits);
-                     if(bandTP > newTP)
-                     {
-                        newTP = bandTP;
-                        modified = true;
-                     }
+                     newTP = bandTP;
+                     modified = true;
                   }
                }
             }
          }
          else // POSITION_TYPE_SELL
          {
-            // For SELL: Use upper band [1] as trailing SL (avoid repainting)
             double bandSL = 0.0;
+            double atr = GetATR();
 
-            if(upperRange)
+            if(prevUpperBand < upperBand)
             {
-               if(isTouched)
-                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
-               else
-                  bandSL =  MathRound(GetBollingerBand(1)); // upper band
-            }
-            else if(lowerRange)
-            {
-               if(isTouched)
-                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
-               else
-                  bandSL =  MathRound(GetBollingerBand(1)); // upper band
-            }
-            
-            // Trail SL: only move lower, must be above current price
-            if(bandSL > currentPrice && bandSL < posSL)
-            {
-               // Respect minimum stop level
-               if(bandSL - currentPrice >= stopLevel * point)
+               if(upperRange && !overRange)
                {
-                  bandSL = NormalizeDouble(MathCeil(bandSL / tickSize) * tickSize, _Digits);
-                  if(posSL == 0 || bandSL < newSL)
-                  {
-                     newSL = bandSL;
-                     modified = true;
-                  }
+                  bandSL = MathRound(GetBollingerBand(1)); // upper band
+                  bandSL = NormalizeDouble(bandSL - atr/2, _Digits); // subtract ATR buffer
+                  // Print("Expanding bands - SELL SL set to upper band - ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+               else if(lowerRange && (middleBand - atr/2 > currentPrice))
+               {
+                  bandSL = MathRound(GetBollingerBand(0)); // middle band
+                  bandSL = NormalizeDouble(bandSL - atr/2, _Digits); // subtract ATR buffer
+                  // Print("Expanding bands - SELL SL set to middle band - ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+            }
+            else if(prevUpperBand > upperBand)
+            {
+               if(upperRange && !overRange)
+               {
+                  bandSL = MathRound(GetBollingerBand(1)); // upper band
+                  bandSL = NormalizeDouble(bandSL + atr/2, _Digits); // add ATR buffer
+                  // Print("Contracting bands - SELL SL set to upper band + ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+               else if(lowerRange && (middleBand + atr/2 > currentPrice))
+               {
+                  bandSL = MathRound(GetBollingerBand(0)); // middle band
+                  bandSL = NormalizeDouble(bandSL + atr/2, _Digits); // add ATR buffer
+                  // Print("Contracting bands - SELL SL set to middle band + ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+            }
+
+            // Trail SL: only move lower, must be above current price
+            if(bandSL > currentPrice && (bandSL - currentPrice >= stopLevel * point))
+            {
+               bandSL = NormalizeDouble(MathCeil(bandSL / tickSize) * tickSize, _Digits);
+               if(posSL == 0 || bandSL < newSL)
+               {
+                  newSL = bandSL;
+                  modified = true;
                }
             }
             
@@ -1258,7 +1309,7 @@ double GetATR()
 //+------------------------------------------------------------------+
 //| Get Bollinger Band value                                         |
 //+------------------------------------------------------------------+
-double GetBollingerBand(int bandType)
+double GetBollingerBand(int bandType, int copy=0)
 {
    if(g_BBandsHandle == INVALID_HANDLE)
       return 0;
@@ -1267,10 +1318,10 @@ double GetBollingerBand(int bandType)
    // int amount = MathAbs(InpBBands_Shift) + 1;
    ArraySetAsSeries(bandBuffer, true);
    
-   if(CopyBuffer(g_BBandsHandle, bandType, 0, 2, bandBuffer) <= 0)
+   if(CopyBuffer(g_BBandsHandle, bandType, 0, 3, bandBuffer) <= 0)
       return 0;
    
-   return bandBuffer[1];
+   return bandBuffer[copy];
 }
 
 //+------------------------------------------------------------------+
@@ -1353,10 +1404,33 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
       loG.Error("[BUY] ERROR: Invalid ATR value");
       return false;
    }
-   
+
    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double sl = price - (atr * InpATRMultiplierSL);
-   double tp = price + (atr * InpATRMultiplierTP);
+
+   // 0 - BASE_LINE, 1 - UPPER_BAND, 2 - LOWER_BAND
+   double upperBand = GetBollingerBand(1);
+   double lowerBand = GetBollingerBand(2);
+   bool overRange = (price > GetBollingerBand(1) || price < GetBollingerBand(2));
+   
+   double sl = 0.0;
+   double tp = 0.0;
+
+   if(!InpEnableTrailingBBands)
+   {
+      sl = price - (atr * InpATRMultiplierSL);
+      tp = price + (atr * InpATRMultiplierTP);
+   }
+   else if(!overRange)
+   {
+      // When BBands trailing is enabled, set SL to lower band and TP to upper band
+      sl = lowerBand;
+      tp = upperBand;
+   }
+   else
+   {
+      sl = zone.GetBottom() - (atr * InpATRMultiplierSL); // Fallback SL below zone
+      tp = upperBand;
+   }
    
    // Check RCR before opening
    if(InpEnableEvaluation)
@@ -1416,10 +1490,34 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
       loG.Error("[SELL] ERROR: Invalid ATR value");
       return false;
    }
-   
+
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double sl = price + (atr * InpATRMultiplierSL);
-   double tp = price - (atr * InpATRMultiplierTP);
+
+   // 0 - BASE_LINE, 1 - UPPER_BAND, 2 - LOWER_BAND
+   double upperBand = GetBollingerBand(1);
+   double lowerBand = GetBollingerBand(2);
+   bool overRange = (price > GetBollingerBand(1) || price < GetBollingerBand(2));
+   
+   double sl = 0.0;
+   double tp = 0.0;
+
+   if(!InpEnableTrailingBBands)
+   {
+      sl = price + (atr * InpATRMultiplierSL);
+      tp = price - (atr * InpATRMultiplierTP);
+   }
+   else if(!overRange)
+   {
+      // When BBands trailing is enabled, set SL to upper band and TP to lower band
+      sl = upperBand;
+      tp = lowerBand;
+   }
+   else
+   {
+      // When BBands trailing is enabled, set SL to upper band and TP to lower band
+      sl = zone.GetTop() + (atr * InpATRMultiplierSL); // Fallback SL above zone
+      tp = lowerBand;
+   }
    
    // Check RCR before opening
    if(InpEnableEvaluation)
@@ -1667,9 +1765,9 @@ void CheckEvaluationLimits()
          g_TradingDisabled = true;
          CloseAllPositions("MLL Breached");
          loG.Separator();
-         loG.Critical("*** MAXIMUM LOSS LIMIT BREACHED *** Equity: $" + DoubleToString(equity, _Digits) + 
+         loG.Critical("[MLL] MAXIMUM LOSS LIMIT BREACHED! Equity: $" + DoubleToString(equity, _Digits) + 
                " <= MLL Threshold: $" + DoubleToString(g_MaxLossThreshold, _Digits));
-         loG.Critical("TRADING PERMANENTLY DISABLED - Manual intervention required");
+         loG.Critical("[MLL] TRADING PERMANENTLY DISABLED - Manual intervention required");
          loG.Separator();
          Alert("MLL BREACHED! Trading DISABLED. Equity: $", equity);
          ExpertRemove();
@@ -1685,11 +1783,12 @@ void CheckEvaluationLimits()
          g_TradingDisabled = true;
          CloseAllPositions("DLL Breached");
          loG.Separator();
-         loG.Critical("*** DAILY LOSS LIMIT BREACHED *** Equity: $" + DoubleToString(equity, _Digits) + 
+         loG.Critical("[DLL] DAILY LOSS LIMIT BREACHED! Equity: $" + DoubleToString(equity, _Digits) + 
                " <= DLL Threshold: $" + DoubleToString(g_DailyLossThreshold, _Digits));
-         loG.Critical("TRADING DISABLED until daily reset at 23:55");
+         loG.Critical("[DLL] TRADING DISABLED until daily reset at 23:55");
          loG.Separator();
          Alert("DLL BREACHED! Trading DISABLED until 23:55. Equity: $", equity);
+         g_DLLCount++;
       }
       return;
    }
@@ -1933,7 +2032,7 @@ void CheckRCRHardLimit()
 //+------------------------------------------------------------------+
 void CheckDLBLimit()
 {
-   if(!InpEnableEvaluation || InpEnableProfitConsistencyRule)
+   if(!InpEnableEvaluation || !InpEnableDLBRule)
       return;
    
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -2018,7 +2117,7 @@ void CheckProfitSharingRule()
          qualified = true;
       }
    }
-   else
+   else if(InpEnableDLBRule)
    {
       // Use DLB-based payout calculation
       if(actualDLBPct < 1.0)
@@ -2046,6 +2145,12 @@ void CheckProfitSharingRule()
          qualified = true;
       }
    }
+   else
+   {
+      qualificationMethod = "Target Profit Reached";
+      payoutPct = 80.0;  // Full payout if no evaluation rules enabled
+      qualified = true;
+   }
    
    // Process payout if qualified
    if(qualified && payoutPct > 0)
@@ -2066,7 +2171,7 @@ void CheckProfitSharingRule()
       {
          loG.Info("         Profit Consistency: " + DoubleToString(g_ProfitConsistencyPct, 2) + "% < " + DoubleToString(InpProfitConsistencyPct, 0) + "% (PASSED)");
       }
-      else
+      else if(InpEnableDLBRule)
       {
          loG.Info("         Daily Loss Breached: " + DoubleToString(actualDLBPct, 2) + "%");
       }
@@ -2077,17 +2182,93 @@ void CheckProfitSharingRule()
       loG.Info("         Take Profit Hits: " + IntegerToString(g_TPHitCount) + " | Stop Loss Hits: " + IntegerToString(g_SLHitCount));
       loG.Info("         Win Trades: " + IntegerToString(g_WinCount) + " | Loss Trades: " + IntegerToString(g_LossCount));
       loG.Info("         Win Rate: " + DoubleToString((g_WinCount + g_LossCount > 0 ? (g_WinCount * 100.0 / (g_WinCount + g_LossCount)) : 0.0), 2) + "%");
+      loG.Info("         DLL Warning Times: " + IntegerToString(g_DLLCount));
       loG.Info("         Payout Percentage: " + DoubleToString(payoutPct, 0) + "%");
       loG.Info("         Amount Eligible for Withdrawal: $" + DoubleToString(payoutAmount, 2));
       loG.Info("");
       loG.Info("         ┌─────────────────────┬──────────────────┬─────────────────────────┐");
       loG.Info("         │   Payout Tier       │  Profit Share %  │   Withdrawal Amount     │");
       loG.Info("         ├─────────────────────┼──────────────────┼─────────────────────────┤");
-      loG.Info(StringFormat("         │   1st Payout        │       50%%        │   $%-20.2f│", currentProfit * 0.50));
-      loG.Info(StringFormat("         │   2nd Payout        │       75%%        │   $%-20.2f│", currentProfit * 0.75));
-      loG.Info(StringFormat("         │   From 3rd Payout   │       90%%        │   $%-20.2f│", currentProfit * 0.90));
+      if(!InpEnableDLBRule && !InpEnableProfitConsistencyRule)
+      {
+         loG.Info(StringFormat("         │   1st Payout        │       6%%        │   $%-20.2f│", InpInitialBalance * 0.06));
+         loG.Info(StringFormat("         │   2nd Payout        │       6%%        │   $%-20.2f│", InpInitialBalance * 0.06));
+         loG.Info(StringFormat("         │   From 3rd Payout   │       80%%        │   $%-20.2f│", currentProfit * 0.80));
+      }
+      else
+      {
+         loG.Info(StringFormat("         │   1st Payout        │       50%%        │   $%-20.2f│", currentProfit * 0.50));
+         loG.Info(StringFormat("         │   2nd Payout        │       75%%        │   $%-20.2f│", currentProfit * 0.75));
+         loG.Info(StringFormat("         │   From 3rd Payout   │       90%%        │   $%-20.2f│", currentProfit * 0.90));
+      }
       loG.Info("         └─────────────────────┴──────────────────┴─────────────────────────┘");
       loG.Info("");
+      
+      // First Reward on Demand Criteria
+      if(InpEnableFirstRewardOnDemand)
+      {
+         loG.Info("         ══════════════════════════════════════════════════════════════════");
+         loG.Info("         FIRST REWARD ON DEMAND - ELIGIBILITY CRITERIA");
+         loG.Info("         ══════════════════════════════════════════════════════════════════");
+         loG.Info("         Available as add-on for 1-Step, 2-Steps, 3-Steps and Goat Blitz");
+         loG.Info("");
+         loG.Info("         Minimum Requirements:");
+         loG.Info("           • Minimum Profit: 3% of account balance");
+         loG.Info("           • Trading Days: At least 3 trading days");
+         loG.Info("           • Daily Profit: At least 0.5% per day (minimum 3 days)");
+         loG.Info("");
+         loG.Info("         Profit Split:");
+         loG.Info("           • 1st Reward on Demand: 40% profit split");
+         loG.Info("           • Subsequent Rewards: 80% profit split (every 14 or 30 days)");
+         loG.Info("");
+         
+         // Calculate current status
+         double minProfitRequired = InpInitialBalance * 0.03;
+         double minDailyProfitRequired = InpInitialBalance * 0.005;
+         int minTradingDays = 3;
+         
+         // Count days with at least 0.5% profit
+         int qualifyingDays = 0;
+         for(int i = 0; i < ArraySize(g_DailyProfits); i++)
+         {
+            if(g_DailyProfits[i] >= minDailyProfitRequired)
+               qualifyingDays++;
+         }
+         
+         bool meetsMinProfit = currentProfit >= minProfitRequired;
+         bool meetsTradingDays = profitDays >= minTradingDays;
+         bool meetsDailyProfit = qualifyingDays >= minTradingDays;
+         bool isEligible = meetsMinProfit && meetsTradingDays && meetsDailyProfit;
+         
+         loG.Info("         Current Status:");
+         loG.Info("           • Total Profit: $" + DoubleToString(currentProfit, 2) + " / $" + DoubleToString(minProfitRequired, 2) + 
+                  " (" + (meetsMinProfit ? "✓ PASS" : "✗ FAIL") + ")");
+         loG.Info("           • Trading Days: " + IntegerToString(profitDays) + " / " + IntegerToString(minTradingDays) + 
+                  " (" + (meetsTradingDays ? "✓ PASS" : "✗ FAIL") + ")");
+         loG.Info("           • Days with ≥0.5% Profit: " + IntegerToString(qualifyingDays) + " / " + IntegerToString(minTradingDays) + 
+                  " (" + (meetsDailyProfit ? "✓ PASS" : "✗ FAIL") + ")");
+         loG.Info("");
+         
+         if(isEligible)
+         {
+            double firstRewardAmount = currentProfit * 0.40;
+            loG.Info("         ✅ ELIGIBLE for First Reward on Demand!");
+            loG.Info("         Amount Available: $" + DoubleToString(firstRewardAmount, 2) + " (40% of profit)");
+         }
+         else
+         {
+            loG.Info("         ❌ NOT YET ELIGIBLE for First Reward on Demand");
+            if(!meetsMinProfit)
+               loG.Info("            Missing: $" + DoubleToString(minProfitRequired - currentProfit, 2) + " more profit needed");
+            if(!meetsTradingDays)
+               loG.Info("            Missing: " + IntegerToString(minTradingDays - profitDays) + " more trading days needed");
+            if(!meetsDailyProfit)
+               loG.Info("            Missing: " + IntegerToString(minTradingDays - qualifyingDays) + " more days with ≥0.5% profit needed");
+         }
+         loG.Info("         ══════════════════════════════════════════════════════════════════");
+         loG.Info("");
+      }
+      
       loG.Info("         Ready for payout withdrawal!");
       loG.Info("\n");
       
@@ -2609,10 +2790,15 @@ void UpdateEvaluationDisplay()
       maxRCRPct = MathMax(buyRiskPct, sellRiskPct);
    }
    
-   string statusText = (g_TradingDisabled || !InpEnableTrading) ? "DISABLED" : "ACTIVE";
-   if(!InpEnableProfitConsistencyRule)
+   string statusText = (g_TradingDisabled || !InpEnableTrading) ? "     DISABLED" : "      ACTIVE";
+   if(InpEnableDLBRule)
       statusText = g_DLB_WarningShown ? "DLB WARNING" : statusText;
-   
+
+   if(g_TradingDisabled || g_DLB_WarningShown || !InpEnableTrading)
+      g_label[1].Color(clrRed);
+   else if(!g_TradingDisabled || !g_DLB_WarningShown || InpEnableTrading)
+      g_label[1].Color(clrLime);
+
    // Calculate Profit Consistency (best day / total profit)
    double totalProfit = 0.0;
    double bestDayProfit = 0.0;
@@ -2641,18 +2827,20 @@ void UpdateEvaluationDisplay()
    
    // Line by line text 
    g_label[0].Description("EVALUATION STATUS");
-   g_label[1].Description("             " + statusText);
+   g_label[1].Description("       " + statusText);
    g_label[2].Description(StringFormat("Equity: $%.2f", equity));
    g_label[3].Description(StringFormat("Balance: $%.2f", balance));
-   g_label[4].Description(StringFormat("DLL: $%.2f / $%.2f (%.1f%%)", dailyRemaining, dailyLossAllowed, (dailyRemaining / dailyLossAllowed * 100.0)));
-   g_label[5].Description(StringFormat("MLL: $%.2f / $%.2f (%.1f%%)", maxRemaining, maxLossAllowed, (maxRemaining / maxLossAllowed * 100.0)));
+   g_label[4].Description(StringFormat("DLL: $%.2f / $%.2f (%.0f%%)", dailyRemaining, dailyLossAllowed, InpDailyLossLimitPct));
+   g_label[5].Description(StringFormat("MLL: $%.2f / $%.2f (%.0f%%)", maxRemaining, maxLossAllowed, InpMaxLossLimitPct));
+   // g_label[4].Description(StringFormat("DLL: $%.2f / $%.2f (%.1f%%)", dailyRemaining, dailyLossAllowed, (dailyRemaining / dailyLossAllowed * 100.0)));
+   // g_label[5].Description(StringFormat("MLL: $%.2f / $%.2f (%.1f%%)", maxRemaining, maxLossAllowed, (maxRemaining / maxLossAllowed * 100.0)));
    // Calculate payout percentage for display
    string label6Text = "";
    if(InpEnableProfitConsistencyRule)
    {
       label6Text = StringFormat("DLB: %.2f%% (Not Used)", actualDLBPct);
    }
-   else
+   else if(InpEnableDLBRule)
    {
       // Determine payout % based on DLB
       double payoutPct = 0.0;
@@ -2662,12 +2850,16 @@ void UpdateEvaluationDisplay()
       else if(actualDLBPct >= 2.0) payoutPct = 20.0;
       label6Text = StringFormat("DLB: %.2f%% | Payout: %.0f%%", actualDLBPct, payoutPct);
    }
+   else
+   {
+      label6Text = "DLB: (Not Used)";
+   }
    
    g_label[6].Description(label6Text);
-   g_label[7].Description(StringFormat("RCR: %.2f%% | Limit: %.1f%%", maxRCRPct, InpRiskConsistencyPct));
-   g_label[8].Description(StringFormat("Profit Target: $%.2f / $%.2f", currentProfit, profitTarget));
+   g_label[7].Description(StringFormat("RCR: %.2f%% | Limit: %.0f%%", maxRCRPct, InpRiskConsistencyPct));
+   g_label[8].Description(StringFormat("Profit Target: $%.2f / $%.2f (%.0f%%)", currentProfit, profitTarget, InpProfitTargetPct));
    g_label[9].Description(StringFormat("Best Day: $%.2f (%s)", bestDayProfit, bestDayDate > 0 ? CFileHelper::GetDateString(bestDayDate) : "N/A"));
-   g_label[10].Description(StringFormat("Profit Consistency: %.1f%% %s %.0f%%", profitConsistencyPct, InpEnableProfitConsistencyRule ? "<" : "(Not Used)", InpProfitConsistencyPct));
+   g_label[10].Description(StringFormat("Profit Consistency: %.1f%% %s %.0f%%", profitConsistencyPct, InpEnableProfitConsistencyRule ? "<" : "(N/A)", InpProfitConsistencyPct));
    g_label[11].Description(StringFormat("Total Days: %d | Profit: $%.2f", profitDays, totalProfit));
 }
 
@@ -2679,6 +2871,10 @@ bool CreateCustomChart()
    ResetLastError();
 
    if(!g_Chart.ScaleFix(true))
+      return false;
+   else if(!g_Chart.Shift(true))
+      return false;
+   else if(!g_Chart.ShiftSize(50))
       return false;
    else if(!g_Chart.ShowLineAsk(true))
       return false;
