@@ -61,6 +61,7 @@ input string            InpTradeComment = "SD_EA";             // Trade Comment
 
 input group "=== Trailing Settings ==="
 input bool              InpEnableTrailingStop = false;         // Enable Trailing Stop
+input int               InpMinDurationForTrailing = 2;         // Minimum Duration Before Trailing (minutes)
 input double            InpTrailingStopDistance = 50.0;        // Trailing Stop Distance (points)
 input double            InpTrailingStopStep = 10.0;            // Trailing Stop Step (points)
 input bool              InpEnableTrailingBBands = false;       // Enable Bollinger Bands Trailing SL and TP
@@ -332,7 +333,7 @@ int OnInit()
    // Initialize manager
    if(!g_SDManager.Initialize(_Symbol, InpZoneTimeframe, InpLookbackBars, 
                               volumeThreshold, InpMinBarsInZone, InpMaxBarsInZone,
-                              InpMinZoneSize, InpMaxZoneSize, InpMinPriceLeftDistance))
+                              InpMinZoneSize, InpMaxZoneSize, InpMinPriceLeftDistance, InpMaxTrade))
    {
       loG.Error("Failed to initialize Supply Demand Manager! Error '" + ErrorDescription(GetLastError()) + "'");
       delete g_SDManager;
@@ -486,6 +487,7 @@ int OnInit()
       g_MaxLossThreshold = InpInitialBalance - maxLoss;
       g_DLBThreshold = InpInitialBalance - DLBLoss;
       
+      g_DLLCount = 0;
       g_DLBCount = 0;
       g_RCRCount = 0;
       g_TradingDisabled = false;
@@ -836,9 +838,13 @@ void ManageTrailing()
 
       // Check open time needs to over a minimum time (to avoid immediate adjustments)
       datetime posOpenTime = (datetime)PositionGetInteger(POSITION_TIME);
-      int minOpenSeconds = 120; // Minimum 1 minute open time before trailing
-      if(TimeCurrent() - posOpenTime < minOpenSeconds)
-         continue;
+
+      if(InpMinDurationForTrailing != 0)
+      {
+         int minOpenSeconds = InpMinDurationForTrailing * 60; 
+         if(TimeCurrent() - posOpenTime < minOpenSeconds)
+            continue;
+      }
 
       ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -1355,7 +1361,7 @@ double GetPositionCommission(ulong positionTicket)
 //+------------------------------------------------------------------+
 //| Check if position count exceeds maximum for this zone type      |
 //+------------------------------------------------------------------+
-bool HasPositionForZone(ENUM_SD_ZONE_TYPE zoneType)
+bool HasPositionForZone(ENUM_SD_ZONE_TYPE zoneType, ENUM_SD_ZONE_STATE zoneState=SD_STATE_UNTESTED)
 {
    int positionCount = 0;
    
@@ -1377,6 +1383,11 @@ bool HasPositionForZone(ENUM_SD_ZONE_TYPE zoneType)
          positionCount++;
       else if(zoneType == SD_ZONE_DEMAND && posType == POSITION_TYPE_BUY)
          positionCount++;
+      // else if(zoneState == SD_STATE_BROKEN)
+      // {
+      //    // For broken zones, count both BUY and SELL positions
+      //    positionCount++;
+      // }
    }
    
    // Return true if max trades reached
@@ -1397,6 +1408,11 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
       loG.Info("[OpenBuyTrade] Max trades (" + IntegerToString(InpMaxTrade) + ") reached for DEMAND zones");
       return false;
    }
+   // else if(HasPositionForZone(SD_ZONE_SUPPLY, SD_STATE_BROKEN))
+   // {
+   //    loG.Info("[OpenBuyTrade] Max trades (" + IntegerToString(InpMaxTrade) + ") reached for BROKEN SUPPLY zones");
+   //    return false;
+   // }
    
    double atr = GetATR();
    if(atr <= 0)
@@ -1447,8 +1463,10 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    sl = NormalizeDouble(MathFloor(sl / tickSize) * tickSize, _Digits);
    tp = NormalizeDouble(MathCeil(tp / tickSize) * tickSize, _Digits);
+
+   int index = zone.GetZoneIndex() + 1;
    
-   string comment = StringFormat("%s_BUY_D%.2f", InpTradeComment, zone.GetBottom());
+   string comment = StringFormat("%s_BUY_D%d_%.2f", InpTradeComment, index, zone.GetBottom());
    
    // if(InpDebugMode)
    //    Print("[OpenBuyTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
@@ -1483,6 +1501,11 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
       loG.Warning("[SELL] Max trades (" + IntegerToString(InpMaxTrade) + ") reached for SUPPLY zones");
       return false;
    }
+   // else if(HasPositionForZone(SD_ZONE_DEMAND, SD_STATE_BROKEN))
+   // {
+   //    loG.Warning("[SELL] Max trades (" + IntegerToString(InpMaxTrade) + ") reached for BROKEN DEMAND zones");
+   //    return false;
+   // }
    
    double atr = GetATR();
    if(atr <= 0)
@@ -1534,8 +1557,10 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    sl = NormalizeDouble(MathCeil(sl / tickSize) * tickSize, _Digits);
    tp = NormalizeDouble(MathFloor(tp / tickSize) * tickSize, _Digits);
+
+   int index = zone.GetZoneIndex() + 1;
    
-   string comment = StringFormat("%s_SELL_S%.2f", InpTradeComment, zone.GetTop());
+   string comment = StringFormat("%s_SELL_S%d_%.2f", InpTradeComment, index, zone.GetTop());
    
    // if(InpDebugMode)
    //    Print("[OpenSellTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
@@ -2467,8 +2492,8 @@ bool SaveDailyData()
       return false;
    }
    
-   // Write data version (updated to v4 for TP/SL tracking)
-   int version = 4;
+   // Write data version (updated to v5 for DLL count tracking)
+   int version = 5;
    FileWriteInteger(handle, version, INT_VALUE);
    
    // Write daily snapshot data
@@ -2491,6 +2516,9 @@ bool SaveDailyData()
    FileWriteInteger(handle, g_TPHitCount, INT_VALUE);
    FileWriteInteger(handle, g_SLHitCount, INT_VALUE);
    FileWriteLong(handle, g_LastDealCheckTime);
+   
+   // Write DLL count (version 5+)
+   FileWriteInteger(handle, g_DLLCount, INT_VALUE);
    
    FileClose(handle);
    return true;
@@ -2517,7 +2545,7 @@ bool LoadDailyData()
       loG.Error("Failed to open file for reading: " + workFolder + g_FileName + " Error: " + IntegerToString(GetLastError()));
    // Read data version
    int version = FileReadInteger(handle, INT_VALUE);
-   if(version < 1 || version > 4)
+   if(version < 1 || version > 5)
    {
       loG.Warning("Unsupported data file version: " + IntegerToString(version));
       FileClose(handle);
@@ -2555,6 +2583,16 @@ bool LoadDailyData()
          g_TPHitCount = FileReadInteger(handle, INT_VALUE);
          g_SLHitCount = FileReadInteger(handle, INT_VALUE);
          g_LastDealCheckTime = (datetime)FileReadLong(handle);
+         
+         // Read DLL count (version 5+)
+         if(version >= 5)
+         {
+            g_DLLCount = FileReadInteger(handle, INT_VALUE);
+         }
+         else
+         {
+            g_DLLCount = 0;
+         }
       }
       else
       {
@@ -2562,6 +2600,7 @@ bool LoadDailyData()
          g_TPHitCount = 0;
          g_SLHitCount = 0;
          g_LastDealCheckTime = TimeCurrent() - 86400; // Start from yesterday
+         g_DLLCount = 0;
       }
    }
    else
@@ -2573,6 +2612,7 @@ bool LoadDailyData()
       g_TPHitCount = 0;
       g_SLHitCount = 0;
       g_LastDealCheckTime = TimeCurrent() - 86400;
+      g_DLLCount = 0;
    }
    
    FileClose(handle);

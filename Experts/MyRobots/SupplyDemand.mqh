@@ -50,6 +50,8 @@ struct SSupplyDemandZone
    int               zoneIndex;          // Index in zone array
    int               barsInZone;         // Number of bars forming zone
    int               touchCount;         // Times price returned to zone
+   int               maxEntries;         // Maximum entries allowed
+   int               entryCount;         // Actual entries made from this zone
    bool              isValid;            // Is zone valid
    double            distanceToPrice;    // Distance to current price
    bool              priceHasLeft;       // Has price left the zone since formation
@@ -83,7 +85,7 @@ public:
                     ~CSupplyDemandZone();
    
    // Initialization
-   bool              Create(ENUM_SD_ZONE_TYPE type, int index, double top, double bottom, datetime timeStart,
+   bool              Create(ENUM_SD_ZONE_TYPE type, int index, int maxPos, double top, double bottom, datetime timeStart,
                            long volumeTotal, double volumeAvg, int barsInZone);
    
    // Getters
@@ -97,13 +99,18 @@ public:
    double            GetVolumeAvg() const { return m_zone.volumeAvg; }
    bool              IsValid() const { return m_zone.isValid; }
    double            GetDistanceToPrice() const { return m_zone.distanceToPrice; }
+   int               GetZoneIndex() const { return m_zone.zoneIndex; }
    int               GetTouchCount() const { return m_zone.touchCount; }
+   int               GetMaxEntries() const { return m_zone.maxEntries; }
+   int               GetEntryCount() const { return m_zone.entryCount; }
+   bool              CanEnter() const { return m_zone.entryCount < m_zone.maxEntries; }
    SSupplyDemandZone GetZoneData() const { return m_zone; }
    
    // Setters
    void              SetState(ENUM_SD_ZONE_STATE state) { m_zone.state = state; }
    void              SetValid(bool valid) { m_zone.isValid = valid; }
    void              IncrementTouch() { m_zone.touchCount++; }
+   void              IncrementEntry() { m_zone.entryCount++; }
    void              SetPriceHasLeft(bool hasLeft) { m_zone.priceHasLeft = hasLeft; }
    void              SetZoneIndex(int index) { m_zone.zoneIndex = index; }
    void              SetVisualSettings(color supplyCol, color demandCol, color supplyFill, 
@@ -163,7 +170,7 @@ CSupplyDemandZone::~CSupplyDemandZone()
 //+------------------------------------------------------------------+
 //| Create zone                                                       |
 //+------------------------------------------------------------------+
-bool CSupplyDemandZone::Create(ENUM_SD_ZONE_TYPE type, int index, double top, double bottom, datetime timeStart,
+bool CSupplyDemandZone::Create(ENUM_SD_ZONE_TYPE type, int index, int maxPos, double top, double bottom, datetime timeStart,
                                 long volumeTotal, double volumeAvg, int barsInZone)
 {
    m_zone.type = type;
@@ -180,6 +187,8 @@ bool CSupplyDemandZone::Create(ENUM_SD_ZONE_TYPE type, int index, double top, do
    m_zone.state = SD_STATE_UNTESTED;
    m_zone.distanceToPrice = 0;
    m_zone.priceHasLeft = false;  // Price hasn't left the zone yet
+   m_zone.maxEntries = maxPos;  // Maximum entries allowed per zone
+   m_zone.entryCount = 0;  // Initialize entry counter
    
    // Generate object names
    m_zone.rectangleName = GenerateObjectName("Zone ");
@@ -478,6 +487,7 @@ void CSupplyDemandZone::Update()
       ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_WIDTH, borderWidth);
    }
 
+
 }
 
 //+------------------------------------------------------------------+
@@ -528,6 +538,7 @@ private:
    double            m_minZoneSize;       // Minimum zone size in points
    double            m_maxZoneSize;       // Maximum zone size in points
    double            m_minPriceLeftDistance; // Minimum points price must move away to be considered "left"
+   int               m_maxPositionsPerZone; // Maximum open positions allowed per zone
    
    // Display settings
    int               m_showZones;         // -1 = all, 0 = none, N = show N closest zones
@@ -549,7 +560,7 @@ public:
    // Initialization
    bool              Initialize(string symbol, ENUM_TIMEFRAMES timeframe, int lookback, 
                                long volumeThreshold, int minBars, int maxBars,
-                               double minSize, double maxSize, double minPriceLeftDist);
+                               double minSize, double maxSize, double minPriceLeftDist, int maxPos);
    
    // Settings
    void              SetShowZones(int showZones) { m_showZones = showZones; }
@@ -648,7 +659,7 @@ CSupplyDemandManager::~CSupplyDemandManager()
 //+------------------------------------------------------------------+
 bool CSupplyDemandManager::Initialize(string symbol, ENUM_TIMEFRAMES timeframe, int lookback,
                                       long volumeThreshold, int minBars, int maxBars,
-                                      double minSize, double maxSize, double minPriceLeftDist)
+                                      double minSize, double maxSize, double minPriceLeftDist, int maxPos)
 {
    m_symbol = symbol;
    m_timeframe = timeframe;
@@ -659,6 +670,7 @@ bool CSupplyDemandManager::Initialize(string symbol, ENUM_TIMEFRAMES timeframe, 
    m_minZoneSize = minSize;
    m_maxZoneSize = maxSize;
    m_minPriceLeftDistance = minPriceLeftDist;
+   m_maxPositionsPerZone = maxPos;
    
    return true;
 }
@@ -932,7 +944,7 @@ bool CSupplyDemandManager::AddSupplyZone(int index, double top, double bottom, d
    // Use current array size as zone index
    int zoneIndex = ArraySize(m_supplyZones);
    
-   if(!zone.Create(SD_ZONE_SUPPLY, zoneIndex, top, bottom, time, volume, volumeAvg, bars))
+   if(!zone.Create(SD_ZONE_SUPPLY, zoneIndex, m_maxPositionsPerZone, top, bottom, time, volume, volumeAvg, bars))
    {
       delete zone;
       return false;
@@ -969,7 +981,7 @@ bool CSupplyDemandManager::AddDemandZone(int index, double top, double bottom, d
    // Use current array size as zone index
    int zoneIndex = ArraySize(m_demandZones);
    
-   if(!zone.Create(SD_ZONE_DEMAND, zoneIndex, top, bottom, time, volume, volumeAvg, bars))
+   if(!zone.Create(SD_ZONE_DEMAND, zoneIndex, m_maxPositionsPerZone, top, bottom, time, volume, volumeAvg, bars))
    {
       delete zone;
       return false;
@@ -1162,17 +1174,29 @@ void CSupplyDemandManager::UpdateAllZones()
          // }
          if(m_supplyZones[i].HasPriceBroken(currentPrice))
          {
-
-            // Zone is broken - delete it
-            // Print("[HasPriceBroken] SUPPLY " + IntegerToString(i+1) + " - DELETING");
-            delete m_supplyZones[i];
+            // Zone is broken - mark as broken but keep on chart for counter entries
+            // Print("[HasPriceBroken] SUPPLY " + IntegerToString(i+1) + " - MARKED AS BROKEN");
+            m_supplyZones[i].SetState(SD_STATE_BROKEN);
+            m_supplyZones[i].Update();
             
-            // Shift array down
-            for(int j = i; j < ArraySize(m_supplyZones) - 1; j++)
-               m_supplyZones[j] = m_supplyZones[j + 1];
-            
-            ArrayResize(m_supplyZones, ArraySize(m_supplyZones) - 1);
-            continue;  // Skip to next zone
+            // Only open trade if entry limit not reached
+            if(m_supplyZones[i].CanEnter())
+            {
+               if(OpenBuyTrade(m_supplyZones[i]))
+                  m_supplyZones[i].IncrementEntry();
+            }
+            else
+            {               
+               // Delete zone after entry
+               delete m_supplyZones[i];
+               
+               // Shift array down
+               for(int j = i; j < ArraySize(m_supplyZones) - 1; j++)
+                  m_supplyZones[j] = m_supplyZones[j + 1];
+               
+               ArrayResize(m_supplyZones, ArraySize(m_supplyZones) - 1);
+               continue;  // Skip to next zone
+            }
          }
          else if(m_supplyZones[i].IsPriceTouching(currentPrice, 0))
          {
@@ -1186,8 +1210,8 @@ void CSupplyDemandManager::UpdateAllZones()
                   // Print("[IsPriceTouching] SUPPLY ", i+1, " RETURN after leaving | Price=", currentPrice, " Bottom=", m_supplyZones[i].GetBottom(), " Top=", m_supplyZones[i].GetTop());
                   
                   // Open SELL trade for supply zone
-                  if(m_supplyZones[i].GetTouchCount() < 5) // Example volume check
-                     OpenSellTrade(m_supplyZones[i]);
+                  // if(m_supplyZones[i].GetTouchCount() < 5) // Example volume check
+                  OpenSellTrade(m_supplyZones[i]);
 
                   m_supplyZones[i].SetState(SD_STATE_ACTIVE);
                }
@@ -1205,8 +1229,8 @@ void CSupplyDemandManager::UpdateAllZones()
                // Open SELL trade for weak supply zone (only if weak zone trading enabled)
                if(m_enableTradeOnWeakZone)
                {
-                  if(m_supplyZones[i].GetTouchCount() < 5) // Example volume check
-                     OpenSellTrade(m_supplyZones[i]);
+                  // if(m_supplyZones[i].GetTouchCount() < 5) // Example volume check
+                  OpenSellTrade(m_supplyZones[i]);
 
                   m_supplyZones[i].SetState(SD_STATE_ACTIVE);
                }
@@ -1313,17 +1337,29 @@ void CSupplyDemandManager::UpdateAllZones()
          // }
          if(m_demandZones[i].HasPriceBroken(currentPrice))
          {
-
-            // Zone is broken - delete it
-            // Print("[HasPriceBroken] DEMAND ", i+1, " - DELETING");
-            delete m_demandZones[i];
+            // Zone is broken - mark as broken but keep on chart for counter entries
+            // Print("[HasPriceBroken] DEMAND ", i+1, " - MARKED AS BROKEN");
+            m_demandZones[i].SetState(SD_STATE_BROKEN);
+            m_demandZones[i].Update();
             
-            // Shift array down
-            for(int j = i; j < ArraySize(m_demandZones) - 1; j++)
-               m_demandZones[j] = m_demandZones[j + 1];
-            
-            ArrayResize(m_demandZones, ArraySize(m_demandZones) - 1);
-            continue;  // Skip to next zone
+            // Only open trade if entry limit not reached
+            if(m_demandZones[i].CanEnter())
+            {
+               if(OpenSellTrade(m_demandZones[i]))
+                  m_demandZones[i].IncrementEntry();
+            }
+            else
+            {               
+               // Delete zone after entry
+               delete m_demandZones[i];
+               
+               // Shift array down
+               for(int j = i; j < ArraySize(m_demandZones) - 1; j++)
+                  m_demandZones[j] = m_demandZones[j + 1];
+               
+               ArrayResize(m_demandZones, ArraySize(m_demandZones) - 1);
+               continue;  // Skip to next zone
+            }
          }
          else if(m_demandZones[i].IsPriceTouching(currentPrice, 0))
          {
@@ -1337,8 +1373,8 @@ void CSupplyDemandManager::UpdateAllZones()
                   // Print("[IsPriceTouching] DEMAND ", i+1, " RETURN after leaving | Price=", currentPrice, " Bottom=", m_demandZones[i].GetBottom(), " Top=", m_demandZones[i].GetTop());
                   
                   // Open BUY trade for demand zone
-                  if(m_demandZones[i].GetTouchCount() < 5) // Example volume check
-                     OpenBuyTrade(m_demandZones[i]);
+                  // if(m_demandZones[i].GetTouchCount() < 5) // Example volume check
+                  OpenBuyTrade(m_demandZones[i]);
 
                   m_demandZones[i].SetState(SD_STATE_ACTIVE);
                }
@@ -1356,8 +1392,8 @@ void CSupplyDemandManager::UpdateAllZones()
                // Open BUY trade for weak demand zone (only if weak zone trading enabled)
                if(m_enableTradeOnWeakZone)
                {
-                  if(m_demandZones[i].GetTouchCount() < 5) // Example volume check
-                     OpenBuyTrade(m_demandZones[i]);
+                  // if(m_demandZones[i].GetTouchCount() < 5) // Example volume check
+                  OpenBuyTrade(m_demandZones[i]);
 
                   m_demandZones[i].SetState(SD_STATE_ACTIVE);
                }
@@ -2121,7 +2157,7 @@ bool CSupplyDemandManager::LoadZonesFromFile(string fileName)
       CSupplyDemandZone *zone = new CSupplyDemandZone();
       if(zone != NULL)
       {
-         zone.Create(type, zoneIndex, priceTop, priceBottom, timeStart, volumeTotal, volumeAvg, barsInZone);
+         zone.Create(type, zoneIndex, m_maxPositionsPerZone, priceTop, priceBottom, timeStart, volumeTotal, volumeAvg, barsInZone);
          zone.SetState(state);
          zone.SetValid(isValid);
          zone.SetPriceHasLeft(priceHasLeft);
@@ -2168,7 +2204,7 @@ bool CSupplyDemandManager::LoadZonesFromFile(string fileName)
       CSupplyDemandZone *zone = new CSupplyDemandZone();
       if(zone != NULL)
       {
-         zone.Create(type, zoneIndex, priceTop, priceBottom, timeStart, volumeTotal, volumeAvg, barsInZone);
+         zone.Create(type, zoneIndex, m_maxPositionsPerZone, priceTop, priceBottom, timeStart, volumeTotal, volumeAvg, barsInZone);
          zone.SetState(state);
          zone.SetValid(isValid);
          zone.SetPriceHasLeft(priceHasLeft);
