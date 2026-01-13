@@ -256,7 +256,7 @@ bool CSupplyDemandZone::IsPriceInZone(double price)
 //+------------------------------------------------------------------+
 bool CSupplyDemandZone::IsPriceTouching(double price, double tolerance)
 {
-   double touchRange = GetZoneSize() * 0.05; // 5% of zone size
+   double touchRange = GetZoneSize() * 0.05; // 55% of zone size
    if(tolerance > 0)
       touchRange = tolerance;
    

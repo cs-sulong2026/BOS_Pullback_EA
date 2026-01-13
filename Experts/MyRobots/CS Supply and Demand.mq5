@@ -830,7 +830,13 @@ void ManageTrailing()
       
       if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber)
          continue;
-      
+
+      // Check open time needs to over a minimum time (to avoid immediate adjustments)
+      datetime posOpenTime = (datetime)PositionGetInteger(POSITION_TIME);
+      int minOpenSeconds = 60; // Minimum 1 minute open time before trailing
+      if(TimeCurrent() - posOpenTime < minOpenSeconds)
+         continue;
+
       ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
       double posSL = PositionGetDouble(POSITION_SL);
@@ -981,6 +987,13 @@ void ManageTrailing()
          int stopLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
 
          // 0 - BASE_LINE, 1 - UPPER_BAND, 2 - LOWER_BAND
+         double middleBand = GetBollingerBand(0);
+         double upperBand = GetBollingerBand(1);
+         double lowerBand = GetBollingerBand(2);
+
+         double prevUpperBand = GetBollingerBand(1, 1);
+         double prevLowerBand = GetBollingerBand(2, 1);
+
          bool upperRange = (currentPrice >= GetBollingerBand(0) && currentPrice <= GetBollingerBand(1));
          bool lowerRange = (currentPrice >= GetBollingerBand(2) && currentPrice <= GetBollingerBand(0));
          bool overRange = (currentPrice > GetBollingerBand(1) || currentPrice < GetBollingerBand(2));
@@ -992,92 +1005,124 @@ void ManageTrailing()
          if(posType == POSITION_TYPE_BUY)
          {
             double bandSL = 0.0;
+            double atr = GetATR();
 
-            if(upperRange)
+            if(prevLowerBand > lowerBand)
             {
-               if(isTouched)
-                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
-               else
-                  bandSL =  MathRound(GetBollingerBand(2)); // lower band
-            }
-            else if(lowerRange)
-            {
-               if(isTouched)
-                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
-               else
-                  bandSL =  MathRound(GetBollingerBand(2)); // lower band
-            }
-            // Trail SL: only move higher, must be below current price
-            if(bandSL < currentPrice && bandSL > posSL)
-            {
-               // Respect minimum stop level
-               if(currentPrice - bandSL >= stopLevel * point)
+               if(lowerRange && !overRange)
                {
-                  bandSL = NormalizeDouble(MathFloor(bandSL / tickSize) * tickSize, _Digits);
-                  if(bandSL > newSL)
-                  {
-                     newSL = bandSL;
-                     modified = true;
-                  }
+                  bandSL =  MathRound(GetBollingerBand(2)); // lower band   
+                  bandSL = NormalizeDouble(bandSL + atr/2, _Digits); // add ATR buffer
+                  // Print("Expanding bands - BUY SL set to lower band + ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+               else if(upperRange && (middleBand + atr/2 < currentPrice))
+               {
+                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
+                  bandSL = NormalizeDouble(bandSL + atr/2, _Digits); // add ATR buffer
+                  // Print("Expanding bands - BUY SL set to middle band + ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+            }
+            else if(prevLowerBand < lowerBand)
+            {
+               if(lowerRange && !overRange)
+               {
+                  bandSL =  MathRound(GetBollingerBand(2)); // lower band
+                  bandSL = NormalizeDouble(bandSL - atr/2, _Digits); // subtract ATR buffer
+                  // Print("Contracting bands - BUY SL set to lower band - ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+               else if(upperRange && (middleBand - atr/2 < currentPrice))
+               {
+                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
+                  bandSL = NormalizeDouble(bandSL - atr/2, _Digits); // subtract ATR buffer
+                  // Print("Contracting bands - BUY SL set to middle band - ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+            }
+
+            // Trail SL: only move higher, must be below current price
+            if(bandSL < currentPrice && (currentPrice - bandSL >= stopLevel * point))
+            {
+               bandSL = NormalizeDouble(MathFloor(bandSL / tickSize) * tickSize, _Digits);
+               if(bandSL > newSL)
+               {
+                  newSL = bandSL;
+                  modified = true;
                }
             }
             
             if(posTP > 0)
             {
                double bandTP = 0.0;
+               double atr = GetATR();
 
-               if(upperRange)
-                  bandTP =  MathRound(GetBollingerBand(1)); // upper band
-               else if(lowerRange)
-                  bandTP =  MathRound(GetBollingerBand(0)); // middle band
-               
-               if(bandTP < posTP)
+               if(prevLowerBand < lowerBand)
                {
-                  // Ensure TP is above current price with minimum distance
-                  if(bandTP > currentPrice && (bandTP - currentPrice) >= stopLevel * point)
+                  // Contracting bands - use upper band
+                  bandTP =  MathRound(GetBollingerBand(1)); // upper band
+                  bandTP = NormalizeDouble(bandTP - atr/2, _Digits); // subtract ATR buffer
+               }
+               else if(prevLowerBand > lowerBand)
+               {
+                  // Expanding bands - use upper band
+                  bandTP =  MathRound(GetBollingerBand(1)); // upper band
+                  bandTP = NormalizeDouble(bandTP + atr, _Digits); // add ATR buffer
+               }
+
+               // Ensure TP is above current price with minimum distance
+               if(bandTP > currentPrice && (bandTP - currentPrice) >= stopLevel * point)
+               {
+                  bandTP = NormalizeDouble(MathCeil(bandTP / tickSize) * tickSize, _Digits);
+                  if(bandTP != newTP)
                   {
-                     bandTP = NormalizeDouble(MathCeil(bandTP / tickSize) * tickSize, _Digits);
-                     if(bandTP > newTP)
-                     {
-                        newTP = bandTP;
-                        modified = true;
-                     }
+                     newTP = bandTP;
+                     modified = true;
                   }
                }
             }
          }
          else // POSITION_TYPE_SELL
          {
-            // For SELL: Use upper band [1] as trailing SL (avoid repainting)
             double bandSL = 0.0;
+            double atr = GetATR();
 
-            if(upperRange)
+            if(prevUpperBand < upperBand)
             {
-               if(isTouched)
-                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
-               else
-                  bandSL =  MathRound(GetBollingerBand(1)); // upper band
-            }
-            else if(lowerRange)
-            {
-               if(isTouched)
-                  bandSL =  MathRound(GetBollingerBand(0)); // middle band
-               else
-                  bandSL =  MathRound(GetBollingerBand(1)); // upper band
-            }
-            
-            // Trail SL: only move lower, must be above current price
-            if(bandSL > currentPrice && bandSL < posSL)
-            {
-               // Respect minimum stop level
-               if(bandSL - currentPrice >= stopLevel * point)
+               if(upperRange && !overRange)
                {
-                  bandSL = NormalizeDouble(MathCeil(bandSL / tickSize) * tickSize, _Digits);
-                  if(posSL == 0 || bandSL < newSL)
-                  {
-                     newSL = bandSL;
-                     modified = true;
-                  }
+                  bandSL = MathRound(GetBollingerBand(1)); // upper band
+                  bandSL = NormalizeDouble(bandSL - atr/2, _Digits); // subtract ATR buffer
+                  Print("Expanding bands - SELL SL set to upper band - ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+               else if(lowerRange && (middleBand - atr/2 > currentPrice))
+               {
+                  bandSL = MathRound(GetBollingerBand(0)); // middle band
+                  bandSL = NormalizeDouble(bandSL - atr/2, _Digits); // subtract ATR buffer
+                  // Print("Expanding bands - SELL SL set to middle band - ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+            }
+            else if(prevUpperBand > upperBand)
+            {
+               if(upperRange && !overRange)
+               {
+                  bandSL = MathRound(GetBollingerBand(1)); // upper band
+                  bandSL = NormalizeDouble(bandSL + atr/2, _Digits); // add ATR buffer
+                  // Print("Contracting bands - SELL SL set to upper band + ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+               else if(lowerRange && (middleBand + atr/2 > currentPrice))
+               {
+                  bandSL = MathRound(GetBollingerBand(0)); // middle band
+                  bandSL = NormalizeDouble(bandSL + atr/2, _Digits); // add ATR buffer
+                  Print("Contracting bands - SELL SL set to middle band + ATR/2: " + DoubleToString(bandSL, _Digits));
+               }
+            }
+
+            // Trail SL: only move lower, must be above current price
+            if(bandSL > currentPrice && (bandSL - currentPrice >= stopLevel * point))
+            {
+               bandSL = NormalizeDouble(MathCeil(bandSL / tickSize) * tickSize, _Digits);
+               if(posSL == 0 || bandSL < newSL)
+               {
+                  newSL = bandSL;
+                  modified = true;
                }
             }
             
@@ -1261,7 +1306,7 @@ double GetATR()
 //+------------------------------------------------------------------+
 //| Get Bollinger Band value                                         |
 //+------------------------------------------------------------------+
-double GetBollingerBand(int bandType)
+double GetBollingerBand(int bandType, int copy=0)
 {
    if(g_BBandsHandle == INVALID_HANDLE)
       return 0;
@@ -1270,10 +1315,10 @@ double GetBollingerBand(int bandType)
    // int amount = MathAbs(InpBBands_Shift) + 1;
    ArraySetAsSeries(bandBuffer, true);
    
-   if(CopyBuffer(g_BBandsHandle, bandType, 0, 2, bandBuffer) <= 0)
+   if(CopyBuffer(g_BBandsHandle, bandType, 0, 3, bandBuffer) <= 0)
       return 0;
    
-   return bandBuffer[1];
+   return bandBuffer[copy];
 }
 
 //+------------------------------------------------------------------+
@@ -1356,10 +1401,33 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
       loG.Error("[BUY] ERROR: Invalid ATR value");
       return false;
    }
-   
+
    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double sl = price - (atr * InpATRMultiplierSL);
-   double tp = price + (atr * InpATRMultiplierTP);
+
+   // 0 - BASE_LINE, 1 - UPPER_BAND, 2 - LOWER_BAND
+   double upperBand = GetBollingerBand(1);
+   double lowerBand = GetBollingerBand(2);
+   bool overRange = (price > GetBollingerBand(1) || price < GetBollingerBand(2));
+   
+   double sl = 0.0;
+   double tp = 0.0;
+
+   if(!InpEnableTrailingBBands)
+   {
+      sl = price - (atr * InpATRMultiplierSL);
+      tp = price + (atr * InpATRMultiplierTP);
+   }
+   else if(!overRange)
+   {
+      // When BBands trailing is enabled, set SL to lower band and TP to upper band
+      sl = lowerBand;
+      tp = upperBand;
+   }
+   else
+   {
+      sl = zone.GetBottom() - (atr * InpATRMultiplierSL); // Fallback SL below zone
+      tp = upperBand;
+   }
    
    // Check RCR before opening
    if(InpEnableEvaluation)
@@ -1419,10 +1487,34 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
       loG.Error("[SELL] ERROR: Invalid ATR value");
       return false;
    }
-   
+
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double sl = price + (atr * InpATRMultiplierSL);
-   double tp = price - (atr * InpATRMultiplierTP);
+
+   // 0 - BASE_LINE, 1 - UPPER_BAND, 2 - LOWER_BAND
+   double upperBand = GetBollingerBand(1);
+   double lowerBand = GetBollingerBand(2);
+   bool overRange = (price > GetBollingerBand(1) || price < GetBollingerBand(2));
+   
+   double sl = 0.0;
+   double tp = 0.0;
+
+   if(!InpEnableTrailingBBands)
+   {
+      sl = price + (atr * InpATRMultiplierSL);
+      tp = price - (atr * InpATRMultiplierTP);
+   }
+   else if(!overRange)
+   {
+      // When BBands trailing is enabled, set SL to upper band and TP to lower band
+      sl = upperBand;
+      tp = lowerBand;
+   }
+   else
+   {
+      // When BBands trailing is enabled, set SL to upper band and TP to lower band
+      sl = zone.GetTop() + (atr * InpATRMultiplierSL); // Fallback SL above zone
+      tp = lowerBand;
+   }
    
    // Check RCR before opening
    if(InpEnableEvaluation)
@@ -2612,10 +2704,15 @@ void UpdateEvaluationDisplay()
       maxRCRPct = MathMax(buyRiskPct, sellRiskPct);
    }
    
-   string statusText = (g_TradingDisabled || !InpEnableTrading) ? "  DISABLED" : "   ACTIVE";
+   string statusText = (g_TradingDisabled || !InpEnableTrading) ? "     DISABLED" : "      ACTIVE";
    if(!InpEnableProfitConsistencyRule)
       statusText = g_DLB_WarningShown ? "DLB WARNING" : statusText;
-   
+
+   if(g_TradingDisabled || g_DLB_WarningShown || !InpEnableTrading)
+      g_label[1].Color(clrRed);
+   else if(!g_TradingDisabled || !g_DLB_WarningShown || InpEnableTrading)
+      g_label[1].Color(clrLime);
+
    // Calculate Profit Consistency (best day / total profit)
    double totalProfit = 0.0;
    double bestDayProfit = 0.0;
@@ -2644,7 +2741,7 @@ void UpdateEvaluationDisplay()
    
    // Line by line text 
    g_label[0].Description("EVALUATION STATUS");
-   g_label[1].Description("          " + statusText);
+   g_label[1].Description("       " + statusText);
    g_label[2].Description(StringFormat("Equity: $%.2f", equity));
    g_label[3].Description(StringFormat("Balance: $%.2f", balance));
    g_label[4].Description(StringFormat("DLL: $%.2f / $%.2f (%.1f%%)", dailyRemaining, dailyLossAllowed, (dailyRemaining / dailyLossAllowed * 100.0)));
