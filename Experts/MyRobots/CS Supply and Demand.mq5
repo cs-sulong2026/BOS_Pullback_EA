@@ -92,6 +92,11 @@ input color             InpDemandColorFill = clrLightSteelBlue;   // Demand Fill
 input int               InpZoneTransparency = 85;                 // Zone Transparency (0-100)
 input bool              InpShowLabels = true;                     // Show Volume Labels
 
+input group "=== Trading Hours ==="
+input bool              InpUseTimeFilter = false;                 // Enable time filter
+input int               InpStartHour = 8;                         // Start hour (server time)
+input int               InpEndHour = 18;                          // End hour (server time)
+
 input group "=== Advanced Settings ==="
 input ENUM_TIMEFRAMES   InpZoneTimeframe = PERIOD_CURRENT;     // Zone Detection Timeframe
 input bool              InpDetectZoneByVolume = true;          // Detect Zones by Volume
@@ -1401,6 +1406,9 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
 {
    if(zone == NULL || !InpEnableTrading || g_TradingDisabled)
       return false;
+
+   if(InpUseTimeFilter && !TradingHours())
+      return false;
    
    // Check if max trades reached
    if(HasPositionForZone(SD_ZONE_DEMAND))
@@ -1493,6 +1501,9 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
 bool OpenSellTrade(CSupplyDemandZone *zone)
 {
    if(zone == NULL || !InpEnableTrading || g_TradingDisabled)
+      return false;
+
+   if(InpUseTimeFilter && !TradingHours())
       return false;
    
    // Check if max trades reached
@@ -2944,4 +2955,18 @@ bool CreateCustomChart()
       return false;
 
    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Check if current time is within trading hours                   |
+//+------------------------------------------------------------------+
+bool TradingHours()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   
+   if(InpStartHour < InpEndHour)
+      return (dt.hour >= InpStartHour && dt.hour < InpEndHour);
+   else
+      return (dt.hour >= InpStartHour || dt.hour < InpEndHour);
 }
