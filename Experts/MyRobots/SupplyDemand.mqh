@@ -1256,16 +1256,23 @@ void CSupplyDemandManager::UpdateAllZones()
             {
                canDelete = true;
             }
+
+            double prevLow = iLow(m_symbol, PERIOD_CURRENT, 1);
+            double recentLow = iLow(m_symbol, PERIOD_CURRENT, 0);
+            double prevClose = iClose(m_symbol, PERIOD_CURRENT, 1);
+            double recentClose = iClose(m_symbol, PERIOD_CURRENT, 0);
+
+            if(recentClose < prevClose && recentLow < prevLow)
+            {
+               // Further confirmation of break - can delete
+               canDelete = true;
+            } 
             // Only open trade if entry limit not reached
             else if(m_supplyZones[i].CanEnter())
             {
-               // double prevHigh = iHigh(m_symbol, PERIOD_CURRENT, 1);
-               // double prevLow = iLow(m_symbol, PERIOD_CURRENT, 1);
-               // double recentClose = iClose(m_symbol, PERIOD_CURRENT, 0);
-               // double recentHigh = iHigh(m_symbol, PERIOD_CURRENT, 0);
 
                // // Check for confirmation (price moving away from zone)
-               // if(recentHigh > prevHigh)
+               // if(recentLow > prevLow)
                if(OpenBuyTrade(m_supplyZones[i]))
                   m_supplyZones[i].IncrementEntry();
             }
@@ -1426,17 +1433,28 @@ void CSupplyDemandManager::UpdateAllZones()
             if((currentTime - m_demandZones[i].GetTimeStart()) > validSeconds)
             {
                canDelete = true;
-            }            
+            }
+
+            double prevHigh = iHigh(m_symbol, PERIOD_CURRENT, 1);
+            double recentHigh = iHigh(m_symbol, PERIOD_CURRENT, 0);
+            double prevClose = iClose(m_symbol, PERIOD_CURRENT, 1);
+            double recentClose = iClose(m_symbol, PERIOD_CURRENT, 0);
+            
+
+            if(recentClose > prevClose && recentHigh > prevHigh)
+            {
+               canDelete = true;
+            }
             // Only open trade if entry limit not reached
             else if(m_demandZones[i].CanEnter())
             {
-               // double prevLow = iLow(m_symbol, PERIOD_CURRENT, 1);
-               // double prevHigh = iHigh(m_symbol, PERIOD_CURRENT, 1);
-               // double recentClose = iClose(m_symbol, PERIOD_CURRENT, 0);
-               // double recentLow = iLow(m_symbol, PERIOD_CURRENT, 0);
+               // double prevHigh = iHigh(m_symbol, m_timeframe, 1);
+               // double recentHigh = iHigh(m_symbol, m_timeframe, 0);
+               // double prevClose = iClose(m_symbol, m_timeframe, 1);
+               // double recentClose = iClose(m_symbol, m_timeframe, 0);
 
                // // Check for confirmation (price moving away from zone)
-               // if(recentLow < prevLow)
+               // if(recentHigh < prevHigh)
                if(OpenSellTrade(m_demandZones[i]))
                   m_demandZones[i].IncrementEntry();
             }

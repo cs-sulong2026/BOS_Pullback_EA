@@ -128,7 +128,8 @@ int g_MAHandle = INVALID_HANDLE;
 int g_BBandsHandle = INVALID_HANDLE;
 
 //--- Tracking variables
-datetime g_LastBarTime = 0;
+datetime g_LastInpBarTime = 0;
+datetime g_LastCurrBarTime = 0;
 datetime g_LastUpdateTime = 0;
 bool     g_DailyTimerSet = false;
 
@@ -467,7 +468,8 @@ int OnInit()
    }
       
    // Initialize tracking
-   g_LastBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
+   g_LastInpBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
+   g_LastCurrBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
    g_LastUpdateTime = TimeCurrent();
    
    // Initialize evaluation system
@@ -638,11 +640,11 @@ void OnTick()
    
    // Check for new bar
    datetime currentBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
-   bool isNewBar = (currentBarTime != g_LastBarTime);
+   bool isNewBar = (currentBarTime != g_LastInpBarTime);
    
    if(isNewBar)
    {
-      g_LastBarTime = currentBarTime;
+      g_LastInpBarTime = currentBarTime;
       
       if(InpUpdateOnNewBar)
       {
@@ -1486,8 +1488,15 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    int index = zone.GetZoneIndex() + 1;
    
    string comment;
-   if(zone.GetState() == SD_STATE_BROKEN)
-      comment = StringFormat("%s_BUY_S%d_BROKEN_%.2f", InpTradeComment, index, zone.GetBottom());
+   bool isBroken = (zone.GetState() == SD_STATE_BROKEN);
+
+   if(isBroken)
+   {
+      if(CheckBrokenZone())
+         comment = StringFormat("%s_BUY_S%d_BROKEN_%.2f", InpTradeComment, index, zone.GetTop());
+      else
+         return false; // Not confirming broken zone
+   }
    else
       comment = StringFormat("%s_BUY_D%d_%.2f", InpTradeComment, index, zone.GetBottom());
    
@@ -1496,6 +1505,7 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    
    if(g_Trade.Buy(InpLotSize, _Symbol, price, sl, tp, comment))
    {
+      loG.Info("[BUY] on " + ((zone.GetState() == SD_STATE_BROKEN) ? "broken Supply": "Demand") + " Zone " + IntegerToString(index) + "\n" + GetZoneInfo(zone));
       // loG.Info("  🟢 BUY order opened: Ticket: " + IntegerToString(g_Trade.ResultOrder()) + 
       //       " Entry: " + DoubleToString(price, _Digits) + " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
       // loG.Info("[BUY] Checking middle band: " + DoubleToString(GetBollingerBand(0), _Digits));
@@ -1508,6 +1518,49 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
       loG.Error("[BUY] ERROR: Failed to open BUY - " + g_Trade.ResultRetcodeDescription());
       return false;
    }
+}
+
+bool CheckBrokenZone(bool isSupply = true)
+{
+   // Check for new bar
+   datetime currentBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
+   bool isNewBar = (currentBarTime != g_LastCurrBarTime);
+
+   if(isNewBar)
+   {
+      g_LastCurrBarTime = currentBarTime;
+
+      double prevHigh = iHigh(_Symbol, InpZoneTimeframe, 2);
+      double recentHigh = iHigh(_Symbol, InpZoneTimeframe, 1);
+      double prevLow = iLow(_Symbol, InpZoneTimeframe, 2);
+      double recentLow = iLow(_Symbol, InpZoneTimeframe, 1);
+      double prevClose = iClose(_Symbol, InpZoneTimeframe, 2);
+      double recentClose = iClose(_Symbol, InpZoneTimeframe, 1);
+
+      if(isSupply)
+      {
+         // For broken Supply zone, check for bearish engulfing
+         // if(recentHigh > prevHigh && recentLow < prevLow && recentClose < prevClose)
+
+         if(recentLow >= prevLow)
+            return true;
+         else
+            return false;
+      }
+      else
+      {
+         // For broken Demand zone, check for bullish engulfing
+         // if(recentHigh > prevHigh && recentLow < prevLow && recentClose > prevClose)
+
+         // Check if recent low is higher than previous low
+         if(recentHigh <= prevHigh)
+            return true;
+         else
+            return false;
+      }
+   }
+   
+   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -1586,8 +1639,15 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    int index = zone.GetZoneIndex() + 1;
    
    string comment;
-   if(zone.GetState() == SD_STATE_BROKEN)
-      comment = StringFormat("%s_SELL_D%d_BROKEN_%.2f", InpTradeComment, index, zone.GetTop());
+   bool isBroken = (zone.GetState() == SD_STATE_BROKEN);
+
+   if(isBroken)
+   {
+      if(CheckBrokenZone(false))
+         comment = StringFormat("%s_SELL_D%d_BROKEN_%.2f", InpTradeComment, index, zone.GetBottom());
+      else
+         return false; // Not confirming broken zone
+   }
    else
       comment = StringFormat("%s_SELL_S%d_%.2f", InpTradeComment, index, zone.GetTop());
    
@@ -1596,6 +1656,7 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    
    if(g_Trade.Sell(InpLotSize, _Symbol, price, sl, tp, comment))
    {
+      loG.Info("[SELL] on " + ((zone.GetState() == SD_STATE_BROKEN) ? "broken Demand": "Supply") + " Zone " + IntegerToString(index) + "\n" + GetZoneInfo(zone));
       // loG.Info("  🔴 SELL order opened: Ticket: " + IntegerToString(g_Trade.ResultOrder()) +
       //       " Entry: " + DoubleToString(price, _Digits) + " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
       // loG.Info("[SELL] Checking middle band: " + DoubleToString(GetBollingerBand(0), _Digits));
