@@ -2094,8 +2094,9 @@ void CheckDLBLimit()
          loG.Warning("[DLB] WARNING: Daily Loss Breached approaching limit! DLB percentage: " +
                      DoubleToString(g_HighestDLBPct, 2) + "%");
          Alert("WARNING: Daily Loss Breached approaching limit! DLB percentage: ", DoubleToString(g_HighestDLBPct, 2) + "%");
-         return;
+         g_DLBCount++;
       }
+      return;
    }
 }
 
@@ -2225,7 +2226,7 @@ void CheckProfitSharingRule()
       loG.Info("         Take Profit Hits: " + IntegerToString(g_TPHitCount) + " | Stop Loss Hits: " + IntegerToString(g_SLHitCount));
       loG.Info("         Win Trades: " + IntegerToString(g_WinCount) + " | Loss Trades: " + IntegerToString(g_LossCount));
       loG.Info("         Win Rate: " + DoubleToString((g_WinCount + g_LossCount > 0 ? (g_WinCount * 100.0 / (g_WinCount + g_LossCount)) : 0.0), 2) + "%");
-      loG.Info("         DLL Warning Times: " + IntegerToString(g_DLLCount));
+      loG.Info("         DLL Warning Times: " + IntegerToString(g_DLLCount) + " | DLB Warning Times: " + IntegerToString(g_DLBCount));
       loG.Info("         Payout Percentage: " + DoubleToString(payoutPct, 0) + "%");
       loG.Info("         Amount Eligible for Withdrawal: $" + DoubleToString(payoutAmount, 2));
       loG.Info("");
