@@ -1416,11 +1416,6 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
       loG.Info("[OpenBuyTrade] Max trades (" + IntegerToString(InpMaxTrade) + ") reached for DEMAND zones");
       return false;
    }
-   // else if(HasPositionForZone(SD_ZONE_SUPPLY, SD_STATE_BROKEN))
-   // {
-   //    loG.Info("[OpenBuyTrade] Max trades (" + IntegerToString(InpMaxTrade) + ") reached for BROKEN SUPPLY zones");
-   //    return false;
-   // }
    
    double atr = GetATR();
    if(atr <= 0)
@@ -1441,7 +1436,11 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
 
    if(!InpEnableTrailingBBands)
    {
-      sl = price - (atr * InpATRMultiplierSL);
+      if(zone.GetState() == SD_STATE_BROKEN)
+         sl = price - atr; // Tighter SL for broken zones
+      else
+         sl = price - (atr * InpATRMultiplierSL);
+      //---
       tp = price + (atr * InpATRMultiplierTP);
    }
    else if(!overRange)
@@ -1512,11 +1511,6 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
       loG.Warning("[SELL] Max trades (" + IntegerToString(InpMaxTrade) + ") reached for SUPPLY zones");
       return false;
    }
-   // else if(HasPositionForZone(SD_ZONE_DEMAND, SD_STATE_BROKEN))
-   // {
-   //    loG.Warning("[SELL] Max trades (" + IntegerToString(InpMaxTrade) + ") reached for BROKEN DEMAND zones");
-   //    return false;
-   // }
    
    double atr = GetATR();
    if(atr <= 0)
@@ -1537,7 +1531,11 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
 
    if(!InpEnableTrailingBBands)
    {
-      sl = price + (atr * InpATRMultiplierSL);
+      if(zone.GetState() == SD_STATE_BROKEN)
+         sl = price + atr; // Tighter SL for broken zones
+      else
+         sl = price + (atr * InpATRMultiplierSL);
+      //---
       tp = price - (atr * InpATRMultiplierTP);
    }
    else if(!overRange)
