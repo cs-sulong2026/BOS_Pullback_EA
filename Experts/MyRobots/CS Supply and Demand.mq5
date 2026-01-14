@@ -6,7 +6,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Cheruhaya Sulong"
 #property link      "https://www.mql5.com/en/users/cssulong"
-#property version   "1.30"
+#property version   "1.31"
 #property strict
 
 #property description "An Expert Advisor that identifies Supply and Demand zones based on volume and trades accordingly."
@@ -850,6 +850,8 @@ void ManageTrailing()
          if(TimeCurrent() - posOpenTime < minOpenSeconds)
             continue;
       }
+      else if(TimeCurrent() - posOpenTime < 30) // Default 30 seconds
+         continue;
 
       ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -1762,6 +1764,13 @@ void CheckDailyReset()
       {
          g_DailyLossThreshold = balance - dailyLoss;
          g_DLBThreshold = balance - DLBLoss;
+      }
+
+      //
+      if(!InpEnableZonePersistence)
+      {
+         g_SDManager.DeleteAllZones();
+         loG.Info("Daily Reset - All Supply and Demand zones cleared (Zone Persistence disabled)");
       }
       
       // Re-enable trading if it was disabled due to DLL
