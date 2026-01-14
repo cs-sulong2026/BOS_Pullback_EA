@@ -6,7 +6,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Cheruhaya Sulong"
 #property link      "https://www.mql5.com/en/users/cssulong"
-#property version   "1.31"
+#property version   "1.34"
 #property strict
 
 #property description "An Expert Advisor that identifies Supply and Demand zones based on volume and trades accordingly."
@@ -1475,7 +1475,11 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
 
    int index = zone.GetZoneIndex() + 1;
    
-   string comment = StringFormat("%s_BUY_D%d_%.2f", InpTradeComment, index, zone.GetBottom());
+   string comment;
+   if(zone.GetState() == SD_STATE_BROKEN)
+      comment = StringFormat("%s_BUY_D%d_BROKEN_%.2f", InpTradeComment, index, zone.GetBottom());
+   else
+      comment = StringFormat("%s_BUY_D%d_%.2f", InpTradeComment, index, zone.GetBottom());
    
    // if(InpDebugMode)
    //    Print("[OpenBuyTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
@@ -1571,7 +1575,11 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
 
    int index = zone.GetZoneIndex() + 1;
    
-   string comment = StringFormat("%s_SELL_S%d_%.2f", InpTradeComment, index, zone.GetTop());
+   string comment;
+   if(zone.GetState() == SD_STATE_BROKEN)
+      comment = StringFormat("%s_SELL_S%d_BROKEN_%.2f", InpTradeComment, index, zone.GetTop());
+   else
+      comment = StringFormat("%s_SELL_S%d_%.2f", InpTradeComment, index, zone.GetTop());
    
    // if(InpDebugMode)
    //    Print("[OpenSellTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
