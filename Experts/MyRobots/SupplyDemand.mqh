@@ -937,6 +937,11 @@ bool CSupplyDemandManager::AddSupplyZone(int index, double top, double bottom, d
    if(IsZoneOverlapping(SD_ZONE_SUPPLY, top, bottom))
       return false;
    
+   double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+
+   if(currentPrice > top + m_minPriceLeftDistance * _Point)
+      return false; // Price hasn't left zone enough to consider it valid supply zone
+   
    CSupplyDemandZone *zone = new CSupplyDemandZone();
    if(zone == NULL)
       return false;
@@ -973,6 +978,11 @@ bool CSupplyDemandManager::AddDemandZone(int index, double top, double bottom, d
    
    if(IsZoneOverlapping(SD_ZONE_DEMAND, top, bottom))
       return false;
+
+   double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+
+   if(currentPrice < bottom - m_minPriceLeftDistance * _Point)
+      return false; // Price hasn't left zone enough to consider it valid demand zone
    
    CSupplyDemandZone *zone = new CSupplyDemandZone();
    if(zone == NULL)
@@ -1160,18 +1170,6 @@ void CSupplyDemandManager::UpdateAllZones()
          m_supplyZones[i].UpdateDistanceToPrice(currentPrice);
          
          // Check zone state based on S&D rules
-         // if(m_supplyZones[i].IsPriceInZone(currentPrice))
-         // {
-         //    if(!m_supplyZones[i].GetZoneData().priceHasLeft)
-         //    {
-         //       // long volume = m_supplyZones[i].GetVolume();
-
-         //       // if(m_supplyZones[i].GetVolume() >= 4000)
-         //       //    PlaceBuyStop(m_supplyZones[i]);
-
-         //       // m_supplyZones[i].SetState(SD_STATE_BROKEN);
-         //    }
-         // }
          if(m_supplyZones[i].HasPriceBroken(currentPrice))
          {
             // Zone is broken - mark as broken but keep on chart for counter entries
@@ -1182,6 +1180,13 @@ void CSupplyDemandManager::UpdateAllZones()
             // Only open trade if entry limit not reached
             if(m_supplyZones[i].CanEnter())
             {
+               // double prevHigh = iHigh(m_symbol, PERIOD_CURRENT, 1);
+               // double prevLow = iLow(m_symbol, PERIOD_CURRENT, 1);
+               // double recentClose = iClose(m_symbol, PERIOD_CURRENT, 0);
+               // double recentHigh = iHigh(m_symbol, PERIOD_CURRENT, 0);
+
+               // // Check for confirmation (price moving away from zone)
+               // if(recentHigh > prevHigh)
                if(OpenBuyTrade(m_supplyZones[i]))
                   m_supplyZones[i].IncrementEntry();
             }
@@ -1323,18 +1328,6 @@ void CSupplyDemandManager::UpdateAllZones()
          m_demandZones[i].UpdateDistanceToPrice(currentPrice);
          
          // Check zone state based on S&D rules
-         // if(m_demandZones[i].IsPriceInZone(currentPrice))
-         // {
-         //    if(!m_demandZones[i].GetZoneData().priceHasLeft)
-         //    {
-         //       long volume = m_demandZones[i].GetVolume();
-
-         //       // if(volume >= 4000)
-         //       //    PlaceSellStop(m_demandZones[i]);
-
-         //       // m_demandZones[i].SetState(SD_STATE_BROKEN);
-         //    }
-         // }
          if(m_demandZones[i].HasPriceBroken(currentPrice))
          {
             // Zone is broken - mark as broken but keep on chart for counter entries
@@ -1345,6 +1338,13 @@ void CSupplyDemandManager::UpdateAllZones()
             // Only open trade if entry limit not reached
             if(m_demandZones[i].CanEnter())
             {
+               // double prevLow = iLow(m_symbol, PERIOD_CURRENT, 1);
+               // double prevHigh = iHigh(m_symbol, PERIOD_CURRENT, 1);
+               // double recentClose = iClose(m_symbol, PERIOD_CURRENT, 0);
+               // double recentLow = iLow(m_symbol, PERIOD_CURRENT, 0);
+
+               // // Check for confirmation (price moving away from zone)
+               // if(recentLow < prevLow)
                if(OpenSellTrade(m_demandZones[i]))
                   m_demandZones[i].IncrementEntry();
             }
