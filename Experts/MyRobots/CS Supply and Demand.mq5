@@ -91,6 +91,7 @@ input color             InpSupplyColorFill = clrMistyRose;        // Supply Fill
 input color             InpDemandColorFill = clrLightSteelBlue;   // Demand Fill Color
 input int               InpZoneTransparency = 85;                 // Zone Transparency (0-100)
 input bool              InpShowLabels = true;                     // Show Volume Labels
+input bool              InpScaleFix = true;                       // Fix Scale chart
 
 input group "=== Trading Hours ==="
 input bool              InpUseTimeFilter = false;                 // Enable time filter
@@ -2937,9 +2938,18 @@ bool CreateCustomChart()
 {
    ResetLastError();
 
-   if(!g_Chart.ScaleFix(true))
-      return false;
-   else if(!g_Chart.Shift(true))
+   if(InpScaleFix)
+   {
+      if(!g_Chart.ScaleFix(true))
+         return false;
+   }
+   else
+   {
+      if(!g_Chart.ScaleFix(false))
+         return false;
+   }
+   
+   if(!g_Chart.Shift(true))
       return false;
    else if(!g_Chart.ShiftSize(50))
       return false;
