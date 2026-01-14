@@ -1246,9 +1246,18 @@ void CSupplyDemandManager::UpdateAllZones()
             // Print("[HasPriceBroken] SUPPLY " + IntegerToString(i+1) + " - MARKED AS BROKEN");
             m_supplyZones[i].SetState(SD_STATE_BROKEN);
             m_supplyZones[i].Update();
-            
+
+            bool canDelete = false;
+            int validSeconds = 28800; // 8 hours
+            datetime currentTime = TimeCurrent();
+
+            // Check if zone has been broken for longer than valid time
+            if((currentTime - m_supplyZones[i].GetTimeStart()) > validSeconds)
+            {
+               canDelete = true;
+            }
             // Only open trade if entry limit not reached
-            if(m_supplyZones[i].CanEnter())
+            else if(m_supplyZones[i].CanEnter())
             {
                // double prevHigh = iHigh(m_symbol, PERIOD_CURRENT, 1);
                // double prevLow = iLow(m_symbol, PERIOD_CURRENT, 1);
@@ -1261,6 +1270,9 @@ void CSupplyDemandManager::UpdateAllZones()
                   m_supplyZones[i].IncrementEntry();
             }
             else
+               canDelete = true;
+
+            if(canDelete)
             {               
                // Delete zone after entry
                delete m_supplyZones[i];
@@ -1404,9 +1416,19 @@ void CSupplyDemandManager::UpdateAllZones()
             // Print("[HasPriceBroken] DEMAND ", i+1, " - MARKED AS BROKEN");
             m_demandZones[i].SetState(SD_STATE_BROKEN);
             m_demandZones[i].Update();
-            
+
+            // Check if zone can be deleted
+            bool canDelete = false;
+            int validSeconds = 28800; // 8 hours
+            datetime currentTime = TimeCurrent();
+
+            // Check if zone has been broken for longer than valid time
+            if((currentTime - m_demandZones[i].GetTimeStart()) > validSeconds)
+            {
+               canDelete = true;
+            }            
             // Only open trade if entry limit not reached
-            if(m_demandZones[i].CanEnter())
+            else if(m_demandZones[i].CanEnter())
             {
                // double prevLow = iLow(m_symbol, PERIOD_CURRENT, 1);
                // double prevHigh = iHigh(m_symbol, PERIOD_CURRENT, 1);
@@ -1419,6 +1441,9 @@ void CSupplyDemandManager::UpdateAllZones()
                   m_demandZones[i].IncrementEntry();
             }
             else
+               canDelete = true;
+
+            if(canDelete)
             {               
                // Delete zone after entry
                delete m_demandZones[i];
