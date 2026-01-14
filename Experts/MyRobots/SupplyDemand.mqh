@@ -602,7 +602,7 @@ private:
    bool              AddDemandZone(int index, double top, double bottom, datetime time, long volume,
                                   double volumeAvg, int bars);
    bool              IsValidZoneSize(double size);
-   bool              IsZoneOverlapping(ENUM_SD_ZONE_TYPE type, double top, double bottom);
+   bool              IsZoneOverlapping(ENUM_SD_ZONE_TYPE type, double top, double bottom, long volumeTotal);
    void              SortZonesByDistance(double currentPrice);
    void              ShowClosestZones(int count);
    
@@ -716,41 +716,111 @@ bool CSupplyDemandManager::IsValidZoneSize(double size)
 //+------------------------------------------------------------------+
 //| Check if zone overlaps with existing zones                       |
 //+------------------------------------------------------------------+
-bool CSupplyDemandManager::IsZoneOverlapping(ENUM_SD_ZONE_TYPE type, double top, double bottom)
+bool CSupplyDemandManager::IsZoneOverlapping(ENUM_SD_ZONE_TYPE type, double top, double bottom, long volumeTotal)
 {
-   CSupplyDemandZone *zones[];
-   int count = 0;
+   double tolerance = (top - bottom) * 0.1; // 10% overlap tolerance
+   
+   // Check same-type overlaps
+   CSupplyDemandZone *sameTypeZones[];
+   int sameCount = 0;
    
    if(type == SD_ZONE_SUPPLY)
    {
-      count = ArraySize(m_supplyZones);
-      ArrayResize(zones, count);
-      for(int i = 0; i < count; i++)
-         zones[i] = m_supplyZones[i];
+      sameCount = ArraySize(m_supplyZones);
+      ArrayResize(sameTypeZones, sameCount);
+      for(int i = 0; i < sameCount; i++)
+         sameTypeZones[i] = m_supplyZones[i];
    }
    else
    {
-      count = ArraySize(m_demandZones);
-      ArrayResize(zones, count);
-      for(int i = 0; i < count; i++)
-         zones[i] = m_demandZones[i];
+      sameCount = ArraySize(m_demandZones);
+      ArrayResize(sameTypeZones, sameCount);
+      for(int i = 0; i < sameCount; i++)
+         sameTypeZones[i] = m_demandZones[i];
    }
    
-   for(int i = 0; i < count; i++)
+   // Check for same-type overlap
+   for(int i = 0; i < sameCount; i++)
    {
-      if(zones[i] == NULL || !zones[i].IsValid())
+      if(sameTypeZones[i] == NULL || !sameTypeZones[i].IsValid())
          continue;
       
-      double existingTop = zones[i].GetTop();
-      double existingBottom = zones[i].GetBottom();
+      double existingTop = sameTypeZones[i].GetTop();
+      double existingBottom = sameTypeZones[i].GetBottom();
       
-      // Check for overlap (allow small tolerance)
-      double tolerance = (top - bottom) * 0.1; // 10% overlap tolerance
       if((bottom <= existingTop + tolerance && bottom >= existingBottom - tolerance) ||
          (top >= existingBottom - tolerance && top <= existingTop + tolerance) ||
          (bottom <= existingBottom && top >= existingTop))
       {
-         return true;
+         return true; // Same-type overlap - reject new zone
+      }
+   }
+   
+   // Check cross-type overlaps (Supply vs Demand)
+   CSupplyDemandZone *oppositeTypeZones[];
+   int oppositeCount = 0;
+   
+   if(type == SD_ZONE_SUPPLY)
+   {
+      oppositeCount = ArraySize(m_demandZones);
+      ArrayResize(oppositeTypeZones, oppositeCount);
+      for(int i = 0; i < oppositeCount; i++)
+         oppositeTypeZones[i] = m_demandZones[i];
+   }
+   else
+   {
+      oppositeCount = ArraySize(m_supplyZones);
+      ArrayResize(oppositeTypeZones, oppositeCount);
+      for(int i = 0; i < oppositeCount; i++)
+         oppositeTypeZones[i] = m_supplyZones[i];
+   }
+   
+   // Check for cross-type overlap with volume comparison
+   for(int i = oppositeCount - 1; i >= 0; i--)
+   {
+      if(oppositeTypeZones[i] == NULL || !oppositeTypeZones[i].IsValid())
+         continue;
+      
+      double existingTop = oppositeTypeZones[i].GetTop();
+      double existingBottom = oppositeTypeZones[i].GetBottom();
+      
+      if((bottom <= existingTop + tolerance && bottom >= existingBottom - tolerance) ||
+         (top >= existingBottom - tolerance && top <= existingTop + tolerance) ||
+         (bottom <= existingBottom && top >= existingTop))
+      {
+         // Cross-type overlap found - compare volumes
+         long existingVolume = oppositeTypeZones[i].GetVolume();
+         
+         if(volumeTotal > existingVolume)
+         {
+            // New zone has higher volume - delete existing opposite zone
+            delete oppositeTypeZones[i];
+            
+            // Remove from appropriate array
+            if(type == SD_ZONE_SUPPLY)
+            {
+               // Deleting from demand zones
+               for(int j = i; j < ArraySize(m_demandZones) - 1; j++)
+                  m_demandZones[j] = m_demandZones[j + 1];
+               ArrayResize(m_demandZones, ArraySize(m_demandZones) - 1);
+               ReindexDemandZones();
+            }
+            else
+            {
+               // Deleting from supply zones
+               for(int j = i; j < ArraySize(m_supplyZones) - 1; j++)
+                  m_supplyZones[j] = m_supplyZones[j + 1];
+               ArrayResize(m_supplyZones, ArraySize(m_supplyZones) - 1);
+               ReindexSupplyZones();
+            }
+            
+            // Continue checking other zones (don't return yet)
+         }
+         else
+         {
+            // Existing zone has higher volume - reject new zone
+            return true;
+         }
       }
    }
    
@@ -934,7 +1004,7 @@ bool CSupplyDemandManager::AddSupplyZone(int index, double top, double bottom, d
    if(!IsValidZoneSize(top - bottom))
       return false;
    
-   if(IsZoneOverlapping(SD_ZONE_SUPPLY, top, bottom))
+   if(IsZoneOverlapping(SD_ZONE_SUPPLY, top, bottom, volume))
       return false;
    
    double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
@@ -976,7 +1046,7 @@ bool CSupplyDemandManager::AddDemandZone(int index, double top, double bottom, d
    if(!IsValidZoneSize(top - bottom))
       return false;
    
-   if(IsZoneOverlapping(SD_ZONE_DEMAND, top, bottom))
+   if(IsZoneOverlapping(SD_ZONE_DEMAND, top, bottom, volume))
       return false;
 
    double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
@@ -1951,14 +2021,15 @@ bool CSupplyDemandManager::AddManualZone(double top, double bottom, bool isSuppl
    if(!IsValidZoneSize(zoneSize))
       return false;
    
+   long dummyVolume = 1000;  // Placeholder
    // Check for overlapping zones
    ENUM_SD_ZONE_TYPE zoneType = isSupply ? SD_ZONE_SUPPLY : SD_ZONE_DEMAND;
-   if(IsZoneOverlapping(zoneType, top, bottom))
+   if(IsZoneOverlapping(zoneType, top, bottom, dummyVolume))
       return false;
    
    // Calculate dummy volume values for price action zones
    // Use approximate volume since it's not volume-based detection
-   long dummyVolume = 1000;  // Placeholder
+   
    double dummyVolumeAvg = 1000.0;
    int bars = 1;  // Single bar zone for price action
    
