@@ -27,10 +27,12 @@ input group "=== Account Information ==="
 input bool              InpEnableEvaluation = true;            // Enable Prop Firm Evaluation Mode
 input bool              InpEnableLotSizeValidation = false;    // Enable Lot Size Validation (startup check)
 input double            InpInitialBalance = 10000.0;           // Initial account balance for calculations
+input double            InpOwnDailyTarget = 0.0;             // Own Daily Target amount
+input bool              InpStopOnDailyTarget = false;          // Stop trading when daily target reached
 // Evaluation Rules Toggle
-input bool              InpEnableProfitConsistencyRule = true; // Enable Profit Consistency Rule (if disabled, DLB applies automatically)
+input bool              InpEnableProfitConsistencyRule = false; // Enable Profit Consistency Rule (if disabled, DLB applies automatically)
 input bool              InpEnableDLBRule = true;               // Enable DLB Rule
-input double            InpDailyLossBreachedPct = 1.0;         // Daily Loss Breached percentage (for payout calculation)
+input double            InpDailyLossBreachedPct = 1.5;         // Daily Loss Breached percentage (for payout calculation)
 input double            InpRiskConsistencyPct = 2.0;           // Risk Consistency Rule percentage per trade idea
 input double            InpDailyLossLimitPct = 5.0;            // Daily loss limit percentage
 input double            InpMaxLossLimitPct = 10.0;             // Maximum loss limit
@@ -41,7 +43,7 @@ input bool              InpEnableFirstRewardOnDemand = false;  // Enable First R
 
 input group "=== Zone Detection Settings ==="
 input int               InpLookbackBars = 500;                 // Lookback Period (bars)
-input long              InpVolumeThreshold = 1000;             // Volume Threshold (0=auto calculate)
+input long              InpVolumeThreshold = 0;             // Volume Threshold (0=auto calculate)
 input int               InpMinBarsInZone = 2;                  // Minimum Bars in Zone
 input int               InpMaxBarsInZone = 10;                 // Maximum Bars in Zone
 input double            InpMinZoneSize = 50.0;                 // Minimum Zone Size (points)
@@ -50,18 +52,18 @@ input double            InpMinPriceLeftDistance = 20.0;        // Min Distance t
 
 input group "=== Trading Settings ==="
 input bool              InpEnableTrading = true;               // Enable Auto Trading
-input bool              InpEnableTradeOnWeakZone = false;      // Enable Trading on Weak Zones
-input double            InpLotSize = 0.01;                     // Fixed Lot Size
-input int               InpMaxTrade = 3;                       // Maximum Concurrent Trades
-input int               InpATRPeriod = 14;                     // ATR Period
+input bool              InpEnableTradeOnWeakZone = true;      // Enable Trading on Weak Zones
+input double            InpLotSize = 0.15;                     // Fixed Lot Size
+input int               InpMaxTrade = 25;                       // Maximum Concurrent Trades
+input int               InpATRPeriod = 21;                     // ATR Period
 input double            InpATRMultiplierSL = 2.0;              // ATR Multiplier for SL
-input double            InpATRMultiplierTP = 3.0;              // ATR Multiplier for TP
-input int               InpMagicNumber = 123456;               // Magic Number
-input string            InpTradeComment = "SD_EA";             // Trade Comment
+input double            InpATRMultiplierTP = 4.0;              // ATR Multiplier for TP
+input int               InpMagicNumber = 435067;               // Magic Number
+input string            InpTradeComment = "CS";             // Trade Comment
 
 input group "=== Trailing Settings ==="
-input bool              InpEnableTrailingStop = false;         // Enable Trailing Stop
-input int               InpMinDurationForTrailing = 2;         // Minimum Duration Before Trailing (minutes)
+input bool              InpEnableTrailingStop = true;         // Enable Trailing Stop
+input int               InpMinDurationForTrailing = 0;         // Minimum Duration Before Trailing (minutes)
 input double            InpTrailingStopDistance = 50.0;        // Trailing Stop Distance (points)
 input double            InpTrailingStopStep = 10.0;            // Trailing Stop Step (points)
 input bool              InpEnableTrailingBBands = false;       // Enable Bollinger Bands Trailing SL and TP
@@ -76,7 +78,7 @@ input int               InpMA_Period = 14;                     // MA Period
 input int               InpMA_Shift = 0;                       // MA Shift
 input ENUM_MA_METHOD    InpMA_Method = MODE_SMA;               // MA Method
 input ENUM_APPLIED_PRICE InpMA_Applied = PRICE_CLOSE;          // MA Applied Price
-input bool              InpEnableTrailingTP = false;           // Enable Trailing TP
+input bool              InpEnableTrailingTP = true;           // Enable Trailing TP
 input double            InpTrailingTPDistance = 50.0;          // Trailing TP Distance (points)
 input double            InpTrailingTPStep = 10.0;              // Trailing TP Step (points)
 input bool              InpEnableDynamicATR_TP = false;        // Enable ATR-Based Dynamic TP
@@ -91,22 +93,22 @@ input color             InpSupplyColorFill = clrMistyRose;        // Supply Fill
 input color             InpDemandColorFill = clrLightSteelBlue;   // Demand Fill Color
 input int               InpZoneTransparency = 85;                 // Zone Transparency (0-100)
 input bool              InpShowLabels = true;                     // Show Volume Labels
-input bool              InpScaleFix = true;                       // Fix Scale chart
+input bool              InpScaleFix = false;                       // Fix Scale chart
 
 input group "=== Trading Hours ==="
-input bool              InpUseTimeFilter = false;                 // Enable time filter
-input int               InpStartHour = 8;                         // Start hour (server time)
-input int               InpEndHour = 18;                          // End hour (server time)
+input bool              InpUseTimeFilter = true;                 // Enable time filter
+input int               InpStartHour = 7;                         // Start hour (server time)
+input int               InpEndHour = 23;                          // End hour (server time)
 
 input group "=== Advanced Settings ==="
-input ENUM_TIMEFRAMES   InpZoneTimeframe = PERIOD_CURRENT;     // Zone Detection Timeframe
+input ENUM_TIMEFRAMES   InpZoneTimeframe = PERIOD_M1;     // Zone Detection Timeframe
 input bool              InpDetectZoneByVolume = true;          // Detect Zones by Volume
 input bool              InpAutoVolumeThreshold = true;         // Auto Calculate Volume Threshold
 input double            InpVolumeMultiplier = 1.5;             // Volume Multiplier (for auto calc)
 input bool              InpUpdateOnNewBar = true;              // Update Zones on New Bar
 input int               InpUpdateIntervalSec = 300;            // Update Interval (seconds)
-input bool              InpEnableZonePersistence = true;       // Enable Zone Persistence (save/load zones)
-input bool              InpDebugMode = false;                  // Enable Debug Logging
+input bool              InpEnableZonePersistence = false;       // Enable Zone Persistence (save/load zones)
+input bool              InpDebugMode = true;                  // Enable Debug Logging
 input bool              InpSilentLogging = false;              // Silent Logging (no console output)
 input bool              InpDeleteFolder = false;               // Delete log folder on EA removal (Temporary)
 
@@ -116,7 +118,7 @@ CChart               g_Chart;
 CTrade               g_Trade;
 CAccountInfo         account;
 CFileLogger          *loG = NULL;
-CChartObjectLabel    g_label[12];
+CChartObjectLabel    g_label[14];
 
 //--- Global indicators
 int g_ATRHandle = INVALID_HANDLE;
@@ -133,9 +135,11 @@ bool     g_DailyTimerSet = false;
 //--- Evaluation tracking
 int   acc_login = 0;                    // Account login (set in OnInit)
 double g_DailyLossThreshold = 0;        // DLL threshold value (resets daily)
+double g_AntiDLLThreshold = 0;          // Anti-Daily Loss Limit threshold (permanent)
 double g_MaxLossThreshold = 0;          // MLL threshold value (permanent)
 double g_DLBThreshold = 0;              // Daily Loss Breach threshold (for payout calculation)
 int g_DLLCount = 0;                     // Daily Loss Limit breach counter
+int g_AntiDLLCount = 0;                 // Anti-Daily Loss Limit breach counter
 int g_DLBCount = 0;                     // Daily Loss Breach counter
 int g_RCRCount = 0;                     // Risk Consistency Rule breach counter
 bool g_TradingDisabled = false;         // Trading disabled flag
@@ -162,6 +166,7 @@ int g_SLHitCount = 0;                   // Total Stop Loss hits
 int g_WinCount = 0;                     // Total winning trades
 int g_LossCount = 0;                    // Total losing trades
 datetime g_LastDealCheckTime = 0;       // Last time deals were checked
+bool g_DailyTargetReached = false;      // Daily target achievement flag
 
 //+------------------------------------------------------------------+
 //| Validate lot size compatibility with RCR limit                   |
@@ -486,18 +491,22 @@ int OnInit()
       }
       
       double dailyLoss = InpInitialBalance * InpDailyLossLimitPct / 100.0;
+      double antiDailyLoss = InpInitialBalance * InpDailyLossLimitPct * 0.9 / 100.0; // 90% of DLL
       double maxLoss = InpInitialBalance * InpMaxLossLimitPct / 100.0;
       double DLBLoss = InpInitialBalance * InpDailyLossBreachedPct / 100.0;
       
       g_DailyLossThreshold = InpInitialBalance - dailyLoss;
+      g_AntiDLLThreshold = InpInitialBalance - antiDailyLoss;
       g_MaxLossThreshold = InpInitialBalance - maxLoss;
       g_DLBThreshold = InpInitialBalance - DLBLoss;
       
       g_DLLCount = 0;
+      g_AntiDLLCount = 0;
       g_DLBCount = 0;
       g_RCRCount = 0;
       g_TradingDisabled = false;
       g_DLB_WarningShown = false;
+      g_DailyTargetReached = false;
       g_LastResetTime = TimeCurrent();
       g_LastEquityCheck = AccountInfoDouble(ACCOUNT_EQUITY);  // Initialize for edge detection
       
@@ -595,7 +604,7 @@ void OnDeinit(const int reason)
    // Clean up evaluation display
    if(InpEnableEvaluation)
    {
-      for(int i = 0; i < 10; i++)
+      for(int i = 0; i < 14; i++)
       {
          string labelName = g_DisplayLabel + "_" + IntegerToString(i);
          ObjectDelete(0, labelName);
@@ -1478,7 +1487,7 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    
    string comment;
    if(zone.GetState() == SD_STATE_BROKEN)
-      comment = StringFormat("%s_BUY_D%d_BROKEN_%.2f", InpTradeComment, index, zone.GetBottom());
+      comment = StringFormat("%s_BUY_S%d_BROKEN_%.2f", InpTradeComment, index, zone.GetBottom());
    else
       comment = StringFormat("%s_BUY_D%d_%.2f", InpTradeComment, index, zone.GetBottom());
    
@@ -1578,7 +1587,7 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    
    string comment;
    if(zone.GetState() == SD_STATE_BROKEN)
-      comment = StringFormat("%s_SELL_S%d_BROKEN_%.2f", InpTradeComment, index, zone.GetTop());
+      comment = StringFormat("%s_SELL_D%d_BROKEN_%.2f", InpTradeComment, index, zone.GetTop());
    else
       comment = StringFormat("%s_SELL_S%d_%.2f", InpTradeComment, index, zone.GetTop());
    
@@ -1725,7 +1734,8 @@ void CheckDailyReset()
       
       double equity = AccountInfoDouble(ACCOUNT_EQUITY);
       double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-      double dailyLoss = InpInitialBalance * InpDailyLossLimitPct * 0.9 / 100.0;  // Use 90% of DLL as soft limit
+      double dailyLoss = InpInitialBalance * InpDailyLossLimitPct / 100.0;
+      double antiDailyLoss = InpInitialBalance * InpDailyLossLimitPct * 0.9 / 100.0; // 90% of DLL for safety margin
       double DLBLoss = InpInitialBalance * InpDailyLossBreachedPct / 100.0;
       
       // Calculate today's profit before reset (Total Closed P/L + Open Loss)
@@ -1767,11 +1777,13 @@ void CheckDailyReset()
       if(equity > balance)
       {
          g_DailyLossThreshold = equity - dailyLoss;
+         g_AntiDLLThreshold = equity - antiDailyLoss;
          g_DLBThreshold = equity - DLBLoss;
       }
       else
       {
          g_DailyLossThreshold = balance - dailyLoss;
+         g_AntiDLLThreshold = balance - antiDailyLoss;
          g_DLBThreshold = balance - DLBLoss;
       }
 
@@ -1787,6 +1799,9 @@ void CheckDailyReset()
       
       // Reset DLB warning flag for new day
       g_DLB_WarningShown = false;
+      
+      // Reset daily target flag for new day
+      g_DailyTargetReached = false;
       
       // Reset last equity check for new day
       g_LastEquityCheck = equity;
@@ -1817,16 +1832,33 @@ void CheckEvaluationLimits()
          g_TradingDisabled = true;
          CloseAllPositions("MLL Breached");
          loG.Separator();
-         loG.Critical("[MLL] MAXIMUM LOSS LIMIT BREACHED! Equity: $" + DoubleToString(equity, _Digits) + 
+         loG.Critical("[DISQUALIFIED] MAXIMUM LOSS LIMIT BREACHED! Equity: $" + DoubleToString(equity, _Digits) + 
                " <= MLL Threshold: $" + DoubleToString(g_MaxLossThreshold, _Digits));
-         loG.Critical("[MLL] TRADING PERMANENTLY DISABLED - Manual intervention required");
+         loG.Critical("[DISQUALIFIED] EVALUATION TERMINATED. Expert will be removed.");
          loG.Separator();
-         Alert("MLL BREACHED! Trading DISABLED. Equity: $", equity);
+         Alert("MLL BREACHED! EVALUATION TERMINATED!");
          ExpertRemove();
       }
       return;
    }
    
+   if(equity <= g_AntiDLLThreshold)
+   {
+      if(!g_TradingDisabled)
+      {
+         g_TradingDisabled = true;
+         CloseAllPositions("Anti-DLL Breached");
+         loG.Separator();
+         loG.Critical("[Anti-DLL] ANTI DAILY LOSS LIMIT BREACHED! Equity: $" + DoubleToString(equity, _Digits) + 
+               " <= Anti-DLL Threshold: $" + DoubleToString(g_AntiDLLThreshold, _Digits));
+         loG.Critical("[Anti-DLL] TRADING DISABLED until daily reset at 23:55");
+         loG.Separator();
+         Alert("Anti-DLL BREACHED! Trading DISABLED until 23:55.");
+         g_AntiDLLCount++;
+      }
+      return;
+   }
+
    // Check Daily Loss Limit (DLL) - Daily disable
    if(equity <= g_DailyLossThreshold)
    {
@@ -1835,12 +1867,13 @@ void CheckEvaluationLimits()
          g_TradingDisabled = true;
          CloseAllPositions("DLL Breached");
          loG.Separator();
-         loG.Critical("[DLL] DAILY LOSS LIMIT BREACHED! Equity: $" + DoubleToString(equity, _Digits) + 
+         loG.Critical("[DISQUALIFIED] DAILY LOSS LIMIT BREACHED! Equity: $" + DoubleToString(equity, _Digits) + 
                " <= DLL Threshold: $" + DoubleToString(g_DailyLossThreshold, _Digits));
-         loG.Critical("[DLL] TRADING DISABLED until daily reset at 23:55");
+         loG.Critical("[DISQUALIFIED] EVALUATION TERMINATED. Expert will be removed.");
          loG.Separator();
-         Alert("DLL BREACHED! Trading DISABLED until 23:55. Equity: $", equity);
+         Alert("DLL BREACHED! EVALUATION TERMINATED.");
          g_DLLCount++;
+         ExpertRemove();
       }
       return;
    }
@@ -1854,17 +1887,30 @@ void CheckEvaluationLimits()
    //    }
    // }
    
+   // Check Own Daily Target (if enabled)
+   if(InpStopOnDailyTarget && InpOwnDailyTarget > 0)
+   {
+      double todayProfit = balance - g_TodayOpeningBalance;
+      
+      if(todayProfit >= InpOwnDailyTarget && !g_DailyTargetReached)
+      {
+         g_DailyTargetReached = true;
+         g_TradingDisabled = true;
+         CloseAllPositions("Daily Target Reached");
+         loG.Separator();
+         loG.Info("[TARGET] DAILY TARGET REACHED! Profit: $" + DoubleToString(todayProfit, 2) + 
+               " >= Target: $" + DoubleToString(InpOwnDailyTarget, 2));
+         loG.Info("[TARGET] TRADING DISABLED until daily reset at 23:55");
+         loG.Separator();
+         Alert("Daily Target Reached! Profit: $", todayProfit, " - Trading stopped until 23:55");
+      }
+   }
+   
    // Check Risk Consistency Rule at 1.5% soft limit - close violating trade ideas
    CheckRCRSoftLimit();
    
    // Check Risk Consistency Rule HARD LIMIT (2%) - disable trading if exceeded
    CheckRCRHardLimit();
-   
-   // Check Profit Sharing Rule - Qualify for payout
-   CheckProfitSharingRule();
-   
-   // Check Daily Loss Breached (DLB) for payout calculation
-   CheckDLBLimit();
    
    // Track Daily Loss Breached (DLB) for payout calculation (accumulates worst loss, resets daily)
    // DLB tracking runs regardless of which evaluation method is active
@@ -1894,6 +1940,12 @@ void CheckEvaluationLimits()
          loG.Info("[DLB] Payout tier changed to " + DoubleToString(newPayoutTier, 0) + "% | Highest DLB: " + DoubleToString(g_HighestDLBPct, 2) + "% | Current DLB: " + DoubleToString(currentDLBPct, 2) + "% | Daily Loss: $" + DoubleToString(dailyLoss, 2));
       }
    }
+   
+   // Check Daily Loss Breached (DLB) for payout calculation
+   CheckDLBLimit();
+   
+   // Check Profit Sharing Rule - Qualify for payout
+   CheckProfitSharingRule();
 }
 
 //+------------------------------------------------------------------+
@@ -2151,6 +2203,23 @@ void CheckProfitSharingRule()
    double payoutPct = 0.0;
    string qualificationMethod = "";
    bool qualified = false;
+
+   // Calculate current status
+   double minProfitRequired = InpInitialBalance * 0.03;
+   double minDailyProfitRequired = InpInitialBalance * 0.005;
+   int minTradingDays = 3;
+   // Count days with at least 0.5% profit
+   int qualifyingDays = 0;
+   for(int j = 0; j < ArraySize(g_DailyProfits); j++)
+   {
+      if(g_DailyProfits[j] >= minDailyProfitRequired)
+         qualifyingDays++;
+   }
+   
+   bool meetsMinProfit = currentProfit >= minProfitRequired;
+   bool meetsTradingDays = profitDays >= minTradingDays;
+   bool meetsDailyProfit = qualifyingDays >= minTradingDays;
+   bool isEligible = meetsMinProfit && meetsTradingDays && meetsDailyProfit;
    
    if(InpEnableProfitConsistencyRule)
    {
@@ -2198,7 +2267,14 @@ void CheckProfitSharingRule()
          qualified = true;
       }
    }
-   else
+   else if(InpEnableFirstRewardOnDemand && isEligible)
+   {
+      // First Reward on Demand qualification
+      payoutPct = 40.0;  // Full payout
+      qualificationMethod = "First Reward on Demand Eligibility";
+      qualified = true;
+   }
+   else if(!InpEnableFirstRewardOnDemand)
    {
       qualificationMethod = "Target Profit Reached";
       payoutPct = 80.0;  // Full payout if no evaluation rules enabled
@@ -2235,7 +2311,7 @@ void CheckProfitSharingRule()
       loG.Info("         Take Profit Hits: " + IntegerToString(g_TPHitCount) + " | Stop Loss Hits: " + IntegerToString(g_SLHitCount));
       loG.Info("         Win Trades: " + IntegerToString(g_WinCount) + " | Loss Trades: " + IntegerToString(g_LossCount));
       loG.Info("         Win Rate: " + DoubleToString((g_WinCount + g_LossCount > 0 ? (g_WinCount * 100.0 / (g_WinCount + g_LossCount)) : 0.0), 2) + "%");
-      loG.Info("         DLL Warning Times: " + IntegerToString(g_DLLCount) + " | DLB Warning Times: " + IntegerToString(g_DLBCount));
+      loG.Info("         DLL Warning Times: " + IntegerToString(g_AntiDLLCount) + " | DLB Times: " + IntegerToString(g_DLBCount));
       loG.Info("         Payout Percentage: " + DoubleToString(payoutPct, 0) + "%");
       loG.Info("         Amount Eligible for Withdrawal: $" + DoubleToString(payoutAmount, 2));
       loG.Info("");
@@ -2275,23 +2351,6 @@ void CheckProfitSharingRule()
          loG.Info("           • Subsequent Rewards: 80% profit split (every 14 or 30 days)");
          loG.Info("");
          
-         // Calculate current status
-         double minProfitRequired = InpInitialBalance * 0.03;
-         double minDailyProfitRequired = InpInitialBalance * 0.005;
-         int minTradingDays = 3;
-         
-         // Count days with at least 0.5% profit
-         int qualifyingDays = 0;
-         for(int i = 0; i < ArraySize(g_DailyProfits); i++)
-         {
-            if(g_DailyProfits[i] >= minDailyProfitRequired)
-               qualifyingDays++;
-         }
-         
-         bool meetsMinProfit = currentProfit >= minProfitRequired;
-         bool meetsTradingDays = profitDays >= minTradingDays;
-         bool meetsDailyProfit = qualifyingDays >= minTradingDays;
-         bool isEligible = meetsMinProfit && meetsTradingDays && meetsDailyProfit;
          
          loG.Info("         Current Status:");
          loG.Info("           • Total Profit: $" + DoubleToString(currentProfit, 2) + " / $" + DoubleToString(minProfitRequired, 2) + 
@@ -2748,17 +2807,19 @@ void DeleteTestingLogs()
 void CreateEvaluationDisplay()
 {
    int i,sy=7;
-   int xOffset[12]=
+   int xOffset[14]=
    {
       10, 10,
       180, 180,
       350, 350,
       620, 620,
       850, 850,
-      1080, 1080
+      1080, 1080,
+      1310, 1310
    };
-   int yOffset[12]=
+   int yOffset[14]=
    {
+      2, 1,
       2, 1,
       2, 1,
       2, 1,
@@ -2768,8 +2829,8 @@ void CreateEvaluationDisplay()
    };
    int dy=16;
    
-   // Create 6 column with 2 label lines (added total days traded)
-   for(i = 0; i < 12; i++)
+   // Create 7 column with 2 label lines (added daily target tracking)
+   for(i = 0; i < 14; i++)
    {
       string labelName = g_DisplayLabel + "_" + IntegerToString(i);
 
@@ -2929,6 +2990,17 @@ void UpdateEvaluationDisplay()
    g_label[9].Description(StringFormat("Best Day: $%.2f (%s)", bestDayProfit, bestDayDate > 0 ? CFileHelper::GetDateString(bestDayDate) : "N/A"));
    g_label[10].Description(StringFormat("Profit Consistency: %.1f%% %s %.0f%%", profitConsistencyPct, InpEnableProfitConsistencyRule ? "<" : "(N/A)", InpProfitConsistencyPct));
    g_label[11].Description(StringFormat("Total Days: %d | Profit: $%.2f", profitDays, totalProfit));
+   
+   // Daily Target tracking
+   double todayProfit = balance - g_TodayOpeningBalance;
+   double targetProgress = (InpOwnDailyTarget > 0) ? (todayProfit / InpOwnDailyTarget * 100.0) : 0.0;
+   string targetStatus = g_DailyTargetReached ? "REACHED" : (todayProfit >= InpOwnDailyTarget ? "ACHIEVED" : "ACTIVE");
+   color targetColor = g_DailyTargetReached ? clrLime : (todayProfit >= InpOwnDailyTarget ? clrYellow : C'210,210,210');
+   
+   g_label[12].Description(StringFormat("Daily Target: $%.2f / $%.2f (%.0f%%)", todayProfit, InpOwnDailyTarget, targetProgress));
+   g_label[12].Color(targetColor);
+   g_label[13].Description(StringFormat("Target Status: %s", targetStatus));
+   g_label[13].Color(targetColor);
 }
 
 //+------------------------------------------------------------------+
