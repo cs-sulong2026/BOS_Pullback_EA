@@ -1011,7 +1011,13 @@ bool CSupplyDemandManager::AddSupplyZone(int index, double top, double bottom, d
 
    if(currentPrice > top + m_minPriceLeftDistance * _Point)
       return false; // Price hasn't left zone enough to consider it valid supply zone
-   
+
+   int validSeconds = 14400; // 4 hours
+   datetime currentTime = TimeCurrent();
+
+   if((currentTime - time > validSeconds))
+      return false; // Supply zone is too old to consider
+
    CSupplyDemandZone *zone = new CSupplyDemandZone();
    if(zone == NULL)
       return false;
@@ -1054,6 +1060,12 @@ bool CSupplyDemandManager::AddDemandZone(int index, double top, double bottom, d
    if(currentPrice < bottom - m_minPriceLeftDistance * _Point)
       return false; // Price hasn't left zone enough to consider it valid demand zone
    
+   int validSeconds = 14400; // 4 hours
+   datetime currentTime = TimeCurrent();
+
+   if((currentTime - time > validSeconds))
+      return false; // Supply zone is too old to consider
+
    CSupplyDemandZone *zone = new CSupplyDemandZone();
    if(zone == NULL)
       return false;

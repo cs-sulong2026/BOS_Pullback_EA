@@ -6,7 +6,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Cheruhaya Sulong"
 #property link      "https://www.mql5.com/en/users/cssulong"
-#property version   "1.46"
+#property version   "1.47"
 #property strict
 
 #property description "An Expert Advisor that identifies Supply and Demand zones based on volume and trades accordingly."
@@ -475,7 +475,24 @@ int OnInit()
       
       loG.Log("  Trading enabled with Magic Number: " + IntegerToString(InpMagicNumber));
    }
-      
+   
+   if(InpDetectZoneByVolume)
+   {
+      // Use volume-based detection (original method)
+      if(!g_SDManager.DetectZones())
+      {
+         loG.Warning("Volume-based zone detection failed");
+      }
+      else
+      {
+         g_SDManager.ManageZoneDisplay();
+
+         loG.Info(" Volume-based zone detection complete:");
+         loG.Log("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
+         loG.Log("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
+      }
+   }
+
    // Initialize tracking
    g_LastInpBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
    g_LastCurrBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
