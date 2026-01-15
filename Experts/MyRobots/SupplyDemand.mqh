@@ -1270,9 +1270,7 @@ void CSupplyDemandManager::UpdateAllZones()
             // Only open trade if entry limit not reached
             else if(m_supplyZones[i].CanEnter())
             {
-
                // // Check for confirmation (price moving away from zone)
-               // if(recentLow > prevLow)
                if(OpenBuyTrade(m_supplyZones[i]))
                   m_supplyZones[i].IncrementEntry();
             }
@@ -1389,6 +1387,7 @@ void CSupplyDemandManager::UpdateAllZones()
                {
                   // Mark that price has left the zone for the first time
                   m_supplyZones[i].SetPriceHasLeft(true);
+
                   // Print("[UpdateAllZones] SUPPLY ", i+1, " Price LEFT zone - now validated (distance: ", 
                   //      DoubleToString(((zoneTop - currentPrice) / point), 0), " points, required: ", DoubleToString((minDistance / point), 0), " points)");
                }
@@ -1402,6 +1401,19 @@ void CSupplyDemandManager::UpdateAllZones()
             }
          }
          
+         bool isBroken = m_supplyZones[i].GetState() == SD_STATE_BROKEN;
+         bool priceLeft = m_supplyZones[i].IsPriceInZone(currentPrice);
+
+         if(!isBroken && priceLeft)
+         {
+            if(m_supplyZones[i].CanEnter())
+            {
+               if(OpenSellTrade(m_supplyZones[i]))
+                  m_supplyZones[i].IncrementEntry();
+
+               Print("[UpdateAllZones] SUPPLY ", i+1, " Trade opened early bird entry.");
+            }
+         }
          m_supplyZones[i].Update();
       }
    }
@@ -1448,13 +1460,7 @@ void CSupplyDemandManager::UpdateAllZones()
             // Only open trade if entry limit not reached
             else if(m_demandZones[i].CanEnter())
             {
-               // double prevHigh = iHigh(m_symbol, m_timeframe, 1);
-               // double recentHigh = iHigh(m_symbol, m_timeframe, 0);
-               // double prevClose = iClose(m_symbol, m_timeframe, 1);
-               // double recentClose = iClose(m_symbol, m_timeframe, 0);
-
                // // Check for confirmation (price moving away from zone)
-               // if(recentHigh < prevHigh)
                if(OpenSellTrade(m_demandZones[i]))
                   m_demandZones[i].IncrementEntry();
             }
@@ -1515,7 +1521,7 @@ void CSupplyDemandManager::UpdateAllZones()
             {
                m_demandZones[i].SetState(SD_STATE_ACTIVE);
             }
-         }
+         }               
          else
          {
             // Price is NOT touching the zone
@@ -1571,6 +1577,8 @@ void CSupplyDemandManager::UpdateAllZones()
                {
                   // Mark that price has left the zone for the first time
                   m_demandZones[i].SetPriceHasLeft(true);
+
+
                   // Print("[UpdateAllZones] DEMAND ", i+1, " Price LEFT zone - now validated (distance: ", 
                   //      DoubleToString(((currentPrice - zoneBottom) / point), 0), " points, required: ", DoubleToString((minDistance / point), 0), " points)");
                }
@@ -1584,6 +1592,20 @@ void CSupplyDemandManager::UpdateAllZones()
             }
          }
          
+         bool isBroken = m_demandZones[i].GetState() == SD_STATE_BROKEN;
+         bool priceLeft = !m_demandZones[i].IsPriceInZone(currentPrice);
+
+         if(!isBroken && priceLeft)
+         {
+            // Price is away from zone and zone is active - can open trade
+            if(m_demandZones[i].CanEnter())
+            {
+               if(OpenBuyTrade(m_demandZones[i]))
+                  m_demandZones[i].IncrementEntry();
+
+               Print("[UpdateAllZones] DEMAND ", i+1, " Trade opened early bird entry.");
+            }
+         }
          m_demandZones[i].Update();
       }
    }

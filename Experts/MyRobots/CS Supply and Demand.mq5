@@ -6,7 +6,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Cheruhaya Sulong"
 #property link      "https://www.mql5.com/en/users/cssulong"
-#property version   "1.35"
+#property version   "1.40"
 #property strict
 
 #property description "An Expert Advisor that identifies Supply and Demand zones based on volume and trades accordingly."
@@ -1489,6 +1489,7 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    
    string comment;
    bool isBroken = (zone.GetState() == SD_STATE_BROKEN);
+   bool priceLeftZone = zone.GetZoneData().priceHasLeft;
 
    if(isBroken)
    {
@@ -1497,9 +1498,16 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
       else
          return false; // Not confirming broken zone
    }
+   else if(EarlyBirdEntry(false))
+   {
+      if(!priceLeftZone)
+         comment = StringFormat("%s_BUY_EB%d_%.2f", InpTradeComment, index, zone.GetTop());
+      else
+         comment = StringFormat("%s_BUY_D%d_%.2f", InpTradeComment, index, zone.GetTop());
+   }
    else
-      comment = StringFormat("%s_BUY_D%d_%.2f", InpTradeComment, index, zone.GetBottom());
-   
+      return false;
+      
    // if(InpDebugMode)
    //    Print("[OpenBuyTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
    
@@ -1554,6 +1562,42 @@ bool CheckBrokenZone(bool isSupply = true)
 
          // Check if recent low is higher than previous low
          if(recentHigh <= prevHigh)
+            return true;
+         else
+            return false;
+      }
+   }
+   
+   return false;
+}
+
+bool EarlyBirdEntry(bool isSupply = true)
+{
+   // Check for new bar
+   datetime currentBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
+   bool isNewBar = (currentBarTime != g_LastCurrBarTime);
+
+   if(isNewBar)
+   {
+      g_LastCurrBarTime = currentBarTime;
+
+      double prevHigh = iHigh(_Symbol, InpZoneTimeframe, 2);
+      double recentHigh = iHigh(_Symbol, InpZoneTimeframe, 1);
+      double prevLow = iLow(_Symbol, InpZoneTimeframe, 2);
+      double recentLow = iLow(_Symbol, InpZoneTimeframe, 1);
+
+      if(isSupply)
+      {
+         // For Supply zone, check for lower high and lower low
+         if(recentHigh < prevHigh && recentLow < prevLow)
+            return true;
+         else
+            return false;
+      }
+      else
+      {
+         // For Demand zone, check for higher high and higher low
+         if(recentHigh > prevHigh && recentLow > prevLow)
             return true;
          else
             return false;
@@ -1640,6 +1684,7 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    
    string comment;
    bool isBroken = (zone.GetState() == SD_STATE_BROKEN);
+   bool priceLeftZone = zone.GetZoneData().priceHasLeft;
 
    if(isBroken)
    {
@@ -1648,8 +1693,15 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
       else
          return false; // Not confirming broken zone
    }
+   else if(EarlyBirdEntry(false))
+   {
+      if(!priceLeftZone)
+         comment = StringFormat("%s_SELL_EB%d_%.2f", InpTradeComment, index, zone.GetTop());
+      else
+         comment = StringFormat("%s_SELL_S%d_%.2f", InpTradeComment, index, zone.GetTop());
+   }
    else
-      comment = StringFormat("%s_SELL_S%d_%.2f", InpTradeComment, index, zone.GetTop());
+      return false;
    
    // if(InpDebugMode)
    //    Print("[OpenSellTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
@@ -1966,6 +2018,10 @@ void CheckEvaluationLimits()
          Alert("Daily Target Reached! Profit: $", todayProfit, " - Trading stopped until 23:55");
       }
    }
+   // else if(InpStopOnDailyTarget && InpOwnDailyTarget == -10)
+   // {
+   //    loG.Warning("Own Daily Target is enabled but set to 0 or less. Please set a valid target amount.");
+   // }
    
    // Check Risk Consistency Rule at 1.5% soft limit - close violating trade ideas
    CheckRCRSoftLimit();
@@ -2068,6 +2124,7 @@ void CheckRCRSoftLimit()
    // Check BUY trade idea
    if(buyRisk > rcrSoftLimit)
    {
+      g_RCRCount++;
       double buyRiskPct = (buyRisk / InpInitialBalance) * 100.0;
       loG.Separator();
       loG.Critical("[EVAL] *** RCR SOFT LIMIT BREACHED (BUY) *** Risk: $" + DoubleToString(buyRisk, 2) + 
@@ -2175,20 +2232,65 @@ void CheckRCRHardLimit()
       sellRisk += slRisk;
    }
    
+   bool isBreached = false;
    // Check if either trade idea exceeds HARD limit
-   if(buyRisk > rcrHardLimit || sellRisk > rcrHardLimit)
+   if(buyRisk > rcrHardLimit)
    {
-      g_TradingDisabled = true;
-      CloseAllPositions("RCR HARD LIMIT BREACHED");
-      
+      // g_TradingDisabled = true;
+      // CloseAllPositions("RCR HARD LIMIT BREACHED");
+      g_RCRCount++;
+      isBreached = true;
+
+      // Close all BUY positions
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+         
+         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+         {
+            if(g_Trade.PositionClose(ticket))
+               Logging("Closed BUY position #" + IntegerToString(ticket) + " - RCR Hard Limit");
+         }
+      }
+   }
+
+   if(sellRisk > rcrHardLimit)
+   {
+      // g_TradingDisabled = true;
+      // CloseAllPositions("RCR HARD LIMIT BREACHED");
+      g_RCRCount++;
+      isBreached = true;
+
+      // Close all SELL positions
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+         
+         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
+         {
+            if(g_Trade.PositionClose(ticket))
+               Logging("Closed SELL position #" + IntegerToString(ticket) + " - RCR Hard Limit");
+         }
+      }
+   }
+
+   if(isBreached)
+   {
       double breachedRisk = MathMax(buyRisk, sellRisk);
       double breachedPct = (breachedRisk / InpInitialBalance) * 100.0;
-      string direction = (buyRisk > sellRisk) ? "BUY" : "SELL";
+      string direction = (sellRisk > buyRisk) ? "SELL" : "BUY";
       
-      loG.Critical("[EVAL] *** RCR HARD LIMIT BREACHED *** Direction: " + direction + " | Risk: $" + DoubleToString(breachedRisk, 2) + 
+      loG.Warning("[HARD] *** RCR HARD LIMIT BREACHED *** Direction: " + direction + " | Risk: -$" + DoubleToString(breachedRisk, 2) + 
             " (" + DoubleToString(breachedPct, 2) + "%) >= " + DoubleToString(InpRiskConsistencyPct, 1) + "% limit");
-      loG.Critical("[EVAL] TRADING DISABLED - Evaluation rules violated");
-      Alert("CRITICAL: RCR HARD LIMIT BREACHED! Trading DISABLED. Risk: ", DoubleToString(breachedPct, 2), "%");
+      loG.Warning("[HARD] All " + direction + " positions closed!");
+      // Alert("Warning: RCR HARD LIMIT BREACHED! Trading DISABLED. Risk: ", DoubleToString(breachedPct, 2), "%");
+      isBreached = false;
    }
 }
 
@@ -2372,7 +2474,7 @@ void CheckProfitSharingRule()
       loG.Info("         Take Profit Hits: " + IntegerToString(g_TPHitCount) + " | Stop Loss Hits: " + IntegerToString(g_SLHitCount));
       loG.Info("         Win Trades: " + IntegerToString(g_WinCount) + " | Loss Trades: " + IntegerToString(g_LossCount));
       loG.Info("         Win Rate: " + DoubleToString((g_WinCount + g_LossCount > 0 ? (g_WinCount * 100.0 / (g_WinCount + g_LossCount)) : 0.0), 2) + "%");
-      loG.Info("         DLL Warning Times: " + IntegerToString(g_AntiDLLCount) + " | DLB Times: " + IntegerToString(g_DLBCount));
+      loG.Info("         DLL Warning Times: " + IntegerToString(g_AntiDLLCount) + " | RCR Warning Times: " + IntegerToString(g_RCRCount) + " | DLB Times: " + IntegerToString(g_DLBCount));
       loG.Info("         Payout Percentage: " + DoubleToString(payoutPct, 0) + "%");
       loG.Info("         Amount Eligible for Withdrawal: $" + DoubleToString(payoutAmount, 2));
       loG.Info("");
