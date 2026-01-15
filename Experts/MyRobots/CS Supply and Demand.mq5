@@ -6,7 +6,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Cheruhaya Sulong"
 #property link      "https://www.mql5.com/en/users/cssulong"
-#property version   "1.40"
+#property version   "1.45"
 #property strict
 
 #property description "An Expert Advisor that identifies Supply and Demand zones based on volume and trades accordingly."
@@ -160,6 +160,7 @@ datetime g_DailyDates[];                // Array of dates for each daily profit
 double g_TodayOpeningBalance = 0;       // Balance at start of today (for daily P/L calc)
 double g_ProfitConsistencyPct = 0.0;    // Current profit consistency percentage
 double g_HighestDLBPct = 0.0;           // Highest DLB % ever reached (for payout calculation)
+double g_HighestRCRPct = 0.0;           // Highest RCR % ever reached (for payout calculation)
 double g_LastPayoutTier = 90.0;         // Last payout tier percentage (for change detection)
 bool g_DLB_WarningShown = false;        // Flag to prevent repeated DLB 1.4% warnings
 int g_TPHitCount = 0;                   // Total Take Profit hits
@@ -734,7 +735,7 @@ void OnTimer()
       // g_SDManager.UpdateAllZones();
       // g_SDManager.ManageZoneDisplay();
    // }
-   
+   CheckRCRHardLimit();
    // Check daily reset (23:55 server time)
    CheckDailyReset();
 }
@@ -1670,7 +1671,6 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
       double potentialRisk = MathAbs(price - sl) * InpLotSize * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       if(!CheckRiskConsistencyRule(_Symbol, POSITION_TYPE_SELL, potentialRisk))
       {
-         loG.Warning("SELL trade blocked - Risk Consistency Rule would be breached");
          return false;
       }
    }
@@ -2027,7 +2027,7 @@ void CheckEvaluationLimits()
    CheckRCRSoftLimit();
    
    // Check Risk Consistency Rule HARD LIMIT (2%) - disable trading if exceeded
-   CheckRCRHardLimit();
+   // CheckRCRHardLimit();
    
    // Track Daily Loss Breached (DLB) for payout calculation (accumulates worst loss, resets daily)
    // DLB tracking runs regardless of which evaluation method is active
@@ -2076,9 +2076,11 @@ void CheckRCRSoftLimit()
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    
    double rcrSoftLimit = balance * InpRiskConsistencyPct * 0.9 / 100.0;  // 90% of RCR limit
+   bool isBreached = false;
    
    // Calculate risk for BUY trade idea
    double buyRisk = 0.0;
+   double pctBuyRisk = 0.0;
    for(int i = 0; i < PositionsTotal(); i++)
    {
       ulong ticket = PositionGetTicket(i);
@@ -2098,9 +2100,33 @@ void CheckRCRSoftLimit()
       
       buyRisk += slRisk;
    }
+
+   pctBuyRisk = (buyRisk / rcrSoftLimit) * 100.0;
+   
+   if(pctBuyRisk >= 90.0)
+   {
+      isBreached = true;
+      g_RCRCount++;
+
+      // Close all BUY positions
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+         
+         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+         {
+            if(g_Trade.PositionClose(ticket))
+               Logging("Closed BUY position #" + IntegerToString(ticket) + " - RCR Hard Limit");
+         }
+      }
+   }
    
    // Calculate risk for SELL trade idea
    double sellRisk = 0.0;
+   double pctSellRisk = 0.0;
    for(int i = 0; i < PositionsTotal(); i++)
    {
       ulong ticket = PositionGetTicket(i);
@@ -2120,44 +2146,14 @@ void CheckRCRSoftLimit()
       
       sellRisk += slRisk;
    }
+
+   pctSellRisk = (sellRisk / rcrSoftLimit) * 100.0;
    
-   // Check BUY trade idea
-   if(buyRisk > rcrSoftLimit)
+   if(pctSellRisk >= 90.0)
    {
+      isBreached = true;
       g_RCRCount++;
-      double buyRiskPct = (buyRisk / InpInitialBalance) * 100.0;
-      loG.Separator();
-      loG.Critical("[EVAL] *** RCR SOFT LIMIT BREACHED (BUY) *** Risk: $" + DoubleToString(buyRisk, 2) + 
-            " (" + DoubleToString(buyRiskPct, 2) + "%) > 90% of " + DoubleToString(InpRiskConsistencyPct, 1) + "% limit - Closing all BUY positions");
-      loG.Separator();
-      Alert("RCR BREACH! Closing all BUY positions to prevent evaluation failure. Risk: ", DoubleToString(buyRiskPct, 2), "%");
-      
-      // Close all BUY positions
-      for(int i = PositionsTotal() - 1; i >= 0; i--)
-      {
-         ulong ticket = PositionGetTicket(i);
-         if(ticket == 0) continue;
-         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
-         
-         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
-         {
-            if(g_Trade.PositionClose(ticket))
-               Logging("Closed BUY position #" + IntegerToString(ticket) + " - RCR Soft Limit");
-         }
-      }
-   }
-   
-   // Check SELL trade idea
-   if(sellRisk > rcrSoftLimit)
-   {
-      double sellRiskPct = (sellRisk / InpInitialBalance) * 100.0;
-      loG.Separator();
-      loG.Critical("[EVAL] *** RCR SOFT LIMIT BREACHED (SELL) *** Risk: $" + DoubleToString(sellRisk, 2) + 
-            " (" + DoubleToString(sellRiskPct, 2) + "%) > 90% of " + DoubleToString(InpRiskConsistencyPct, 1) + "% limit - Closing all SELL positions");
-      loG.Separator();
-      Alert("RCR BREACH! Closing all SELL positions to prevent evaluation failure. Risk: ", DoubleToString(sellRiskPct, 2), "%");
-      
+
       // Close all SELL positions
       for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
@@ -2172,6 +2168,27 @@ void CheckRCRSoftLimit()
                Logging("Closed SELL position #" + IntegerToString(ticket) + " - RCR Soft Limit");
          }
       }
+   }
+
+   // Set the highest RCR percentage reached
+   double buyRiskPct = (buyRisk / InpInitialBalance) * 100.0;
+   double sellRiskPct = (sellRisk / InpInitialBalance) * 100.0;
+   double highestRCRPct = MathMax(buyRiskPct, sellRiskPct);
+
+   if(highestRCRPct > g_HighestRCRPct)
+      g_HighestRCRPct = highestRCRPct;
+
+   if(isBreached)
+   {
+      double breachedRisk = MathMax(buyRisk, sellRisk);
+      double breachedPct = (breachedRisk / InpInitialBalance) * 100.0;
+      string direction = (sellRisk > buyRisk) ? "SELL" : "BUY";
+      
+      loG.Warning("[RCR] HARD LIMIT Breached! Direction: " + direction + " | Risk: -$" + DoubleToString(breachedRisk, 2) + 
+            " (" + DoubleToString(breachedPct, 2) + "%) >= " + DoubleToString(InpRiskConsistencyPct, 1) + "% limit");
+      loG.Warning("[RCR] Highest RCR Percentage: " + DoubleToString(g_HighestRCRPct, 2) + "%");
+      // Alert("Warning: RCR HARD LIMIT BREACHED! Trading DISABLED. Risk: ", DoubleToString(breachedPct, 2), "%");
+      isBreached = false;
    }
 }
 
@@ -2232,6 +2249,14 @@ void CheckRCRHardLimit()
       sellRisk += slRisk;
    }
    
+   // Set the highest RCR percentage reached
+   double buyRiskPct = (buyRisk / InpInitialBalance) * 100.0;
+   double sellRiskPct = (sellRisk / InpInitialBalance) * 100.0;
+   double highestRCRPct = MathMax(buyRiskPct, sellRiskPct);
+
+   if(highestRCRPct > g_HighestRCRPct)
+      g_HighestRCRPct = highestRCRPct;
+   
    bool isBreached = false;
    // Check if either trade idea exceeds HARD limit
    if(buyRisk > rcrHardLimit)
@@ -2286,9 +2311,9 @@ void CheckRCRHardLimit()
       double breachedPct = (breachedRisk / InpInitialBalance) * 100.0;
       string direction = (sellRisk > buyRisk) ? "SELL" : "BUY";
       
-      loG.Warning("[HARD] *** RCR HARD LIMIT BREACHED *** Direction: " + direction + " | Risk: -$" + DoubleToString(breachedRisk, 2) + 
+      loG.Warning("[RCR] HARD LIMIT Breached! Direction: " + direction + " | Risk: -$" + DoubleToString(breachedRisk, 2) + 
             " (" + DoubleToString(breachedPct, 2) + "%) >= " + DoubleToString(InpRiskConsistencyPct, 1) + "% limit");
-      loG.Warning("[HARD] All " + direction + " positions closed!");
+      loG.Warning("[RCR] Highest RCR Percentage: " + DoubleToString(g_HighestRCRPct, 2) + "%");
       // Alert("Warning: RCR HARD LIMIT BREACHED! Trading DISABLED. Risk: ", DoubleToString(breachedPct, 2), "%");
       isBreached = false;
    }
@@ -2317,7 +2342,7 @@ void CheckDLBLimit()
          CloseAllPositions("DLB WARNING THRESHOLD REACHED");
          loG.Warning("[DLB] WARNING: Daily Loss Breached approaching limit! DLB percentage: " +
                      DoubleToString(g_HighestDLBPct, 2) + "%");
-         Alert("WARNING: Daily Loss Breached approaching limit! DLB percentage: ", DoubleToString(g_HighestDLBPct, 2) + "%");
+         // Alert("WARNING: Daily Loss Breached approaching limit! DLB percentage: ", DoubleToString(g_HighestDLBPct, 2) + "%");
          g_DLBCount++;
       }
       return;
@@ -2474,7 +2499,8 @@ void CheckProfitSharingRule()
       loG.Info("         Take Profit Hits: " + IntegerToString(g_TPHitCount) + " | Stop Loss Hits: " + IntegerToString(g_SLHitCount));
       loG.Info("         Win Trades: " + IntegerToString(g_WinCount) + " | Loss Trades: " + IntegerToString(g_LossCount));
       loG.Info("         Win Rate: " + DoubleToString((g_WinCount + g_LossCount > 0 ? (g_WinCount * 100.0 / (g_WinCount + g_LossCount)) : 0.0), 2) + "%");
-      loG.Info("         DLL Warning Times: " + IntegerToString(g_AntiDLLCount) + " | RCR Warning Times: " + IntegerToString(g_RCRCount) + " | DLB Times: " + IntegerToString(g_DLBCount));
+      loG.Info("         DLL Warning Times: " + IntegerToString(g_AntiDLLCount) + " | DLB Times: " + IntegerToString(g_DLBCount));
+      loG.Info("         Highest RCR Percentage: " + DoubleToString(g_HighestRCRPct, 2) + "%" + " | RCR Warning Times: " + IntegerToString(g_RCRCount));
       loG.Info("         Payout Percentage: " + DoubleToString(payoutPct, 0) + "%");
       loG.Info("         Amount Eligible for Withdrawal: $" + DoubleToString(payoutAmount, 2));
       loG.Info("");
@@ -2559,6 +2585,8 @@ void CheckProfitSharingRule()
 bool CheckRiskConsistencyRule(string symbol, ENUM_POSITION_TYPE direction, double newRisk)
 {
    double totalRisk = newRisk; // Start with new trade risk
+   double myRisk = newRisk;
+   double actLimit = InpInitialBalance * InpRiskConsistencyPct / 100.0;
    
    // Calculate total risk for same symbol + direction (trade idea)
    for(int i = 0; i < PositionsTotal(); i++)
@@ -2576,21 +2604,28 @@ bool CheckRiskConsistencyRule(string symbol, ENUM_POSITION_TYPE direction, doubl
       double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
       double posSL = PositionGetDouble(POSITION_SL);
       double posLots = PositionGetDouble(POSITION_VOLUME);
+      double openPriceWeight = posOpenPrice * posLots;
+
+      double currRisk = MathAbs((posSL * posLots) - openPriceWeight) * SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE) / (SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE));
       
+
       // Risk = max potential loss from SL only
       double riskDistance = MathAbs(posOpenPrice - posSL);
       double posRisk = riskDistance * posLots * SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE) / SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
       
       totalRisk += posRisk;
+      myRisk += currRisk;
    }
-   
+
+   double riskPct = (myRisk / actLimit) * 100.0;
+  
    // Check against RCR percentage (90% of limit as soft threshold)
    double rcrLimit = InpInitialBalance * InpRiskConsistencyPct * 0.9 / 100.0;
    
    if(totalRisk > rcrLimit)
    {
-      loG.Critical("*** RCR SOFT LIMIT EXCEEDED *** Total Risk: $" + DoubleToString(totalRisk, _Digits) + 
-            " > 90% RCR Limit: $" + DoubleToString(rcrLimit, _Digits) + " (" + DoubleToString(InpRiskConsistencyPct * 0.9, 2) + "%)");
+      loG.Warning("[RCR] " + ((direction == POSITION_TYPE_BUY) ? "BUY" : "SELL") + " TRADE BLOCKED! Risking: $" + 
+            DoubleToString(totalRisk, 2) + " > 90% ($" + DoubleToString(rcrLimit, 2) + ") of RCR " + DoubleToString(InpRiskConsistencyPct, 2) + " limit.");
       return false;
    }
    

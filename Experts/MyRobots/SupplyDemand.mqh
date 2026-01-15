@@ -1411,7 +1411,7 @@ void CSupplyDemandManager::UpdateAllZones()
                if(OpenSellTrade(m_supplyZones[i]))
                   m_supplyZones[i].IncrementEntry();
 
-               Print("[UpdateAllZones] SUPPLY ", i+1, " Trade opened early bird entry.");
+               // Print("[UpdateAllZones] SUPPLY ", i+1, " Trade opened early bird entry.");
             }
          }
          m_supplyZones[i].Update();
@@ -1603,7 +1603,7 @@ void CSupplyDemandManager::UpdateAllZones()
                if(OpenBuyTrade(m_demandZones[i]))
                   m_demandZones[i].IncrementEntry();
 
-               Print("[UpdateAllZones] DEMAND ", i+1, " Trade opened early bird entry.");
+               // Print("[UpdateAllZones] DEMAND ", i+1, " Trade opened early bird entry.");
             }
          }
          m_demandZones[i].Update();
