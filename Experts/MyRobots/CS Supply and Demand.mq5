@@ -6,12 +6,18 @@
 //+------------------------------------------------------------------+
 #property copyright "Cheruhaya Sulong"
 #property link      "https://www.mql5.com/en/users/cssulong"
-#property version   "1.45"
+#property version   "1.46"
 #property strict
 
 #property description "An Expert Advisor that identifies Supply and Demand zones based on volume and trades accordingly."
 #property description "Includes advanced trailing stop mechanisms using ATR, Bollinger Bands, PSAR, and Moving Averages."
-#property description "WARNING: There is no guarantee that the expert advisor will work as intended. Use at your own risk."
+#property description "WARNING: There is no guarantee that the expert advisor will work as intended. Use at your own risk.\n"
+
+#property description "Release 1.45 - 15.01.2026: \n"
+#property description " - Adjusted RCR breach threshold to 90% for stricter risk control.\n"
+// #property description " - Refine new algorithm during entry with more robust and efficient ways.\n"
+#property description "Release 1.35 - 14.01.2026: \n"
+#property description " - Add daily target tracking.\n"
 
 // Include the Supply & Demand classes
 #include "SupplyDemand.mqh"
@@ -22,7 +28,7 @@
 #include <ChartObjects/ChartObjectsTxtControls.mqh>
 #include <errordescription.mqh>
 
-//--- Input parameters
+//#region Input parameters
 input group "=== Account Information ==="
 input bool              InpEnableEvaluation = true;            // Enable Prop Firm Evaluation Mode
 input bool              InpEnableLotSizeValidation = false;    // Enable Lot Size Validation (startup check)
@@ -111,7 +117,8 @@ input bool              InpEnableZonePersistence = false;       // Enable Zone P
 input bool              InpDebugMode = true;                  // Enable Debug Logging
 input bool              InpSilentLogging = false;              // Silent Logging (no console output)
 input bool              InpDeleteFolder = false;               // Delete log folder on EA removal (Temporary)
-
+//#endregion
+//#region Global variables
 //--- Global objects
 CSupplyDemandManager *g_SDManager = NULL;
 CChart               g_Chart;
@@ -169,6 +176,7 @@ int g_WinCount = 0;                     // Total winning trades
 int g_LossCount = 0;                    // Total losing trades
 datetime g_LastDealCheckTime = 0;       // Last time deals were checked
 bool g_DailyTargetReached = false;      // Daily target achievement flag
+//#endregion
 
 //+------------------------------------------------------------------+
 //| Validate lot size compatibility with RCR limit                   |
@@ -1529,85 +1537,6 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    }
 }
 
-bool CheckBrokenZone(bool isSupply = true)
-{
-   // Check for new bar
-   datetime currentBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
-   bool isNewBar = (currentBarTime != g_LastCurrBarTime);
-
-   if(isNewBar)
-   {
-      g_LastCurrBarTime = currentBarTime;
-
-      double prevHigh = iHigh(_Symbol, InpZoneTimeframe, 2);
-      double recentHigh = iHigh(_Symbol, InpZoneTimeframe, 1);
-      double prevLow = iLow(_Symbol, InpZoneTimeframe, 2);
-      double recentLow = iLow(_Symbol, InpZoneTimeframe, 1);
-      double prevClose = iClose(_Symbol, InpZoneTimeframe, 2);
-      double recentClose = iClose(_Symbol, InpZoneTimeframe, 1);
-
-      if(isSupply)
-      {
-         // For broken Supply zone, check for bearish engulfing
-         // if(recentHigh > prevHigh && recentLow < prevLow && recentClose < prevClose)
-
-         if(recentLow >= prevLow)
-            return true;
-         else
-            return false;
-      }
-      else
-      {
-         // For broken Demand zone, check for bullish engulfing
-         // if(recentHigh > prevHigh && recentLow < prevLow && recentClose > prevClose)
-
-         // Check if recent low is higher than previous low
-         if(recentHigh <= prevHigh)
-            return true;
-         else
-            return false;
-      }
-   }
-   
-   return false;
-}
-
-bool EarlyBirdEntry(bool isSupply = true)
-{
-   // Check for new bar
-   datetime currentBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
-   bool isNewBar = (currentBarTime != g_LastCurrBarTime);
-
-   if(isNewBar)
-   {
-      g_LastCurrBarTime = currentBarTime;
-
-      double prevHigh = iHigh(_Symbol, InpZoneTimeframe, 2);
-      double recentHigh = iHigh(_Symbol, InpZoneTimeframe, 1);
-      double prevLow = iLow(_Symbol, InpZoneTimeframe, 2);
-      double recentLow = iLow(_Symbol, InpZoneTimeframe, 1);
-
-      if(isSupply)
-      {
-         // For Supply zone, check for lower high and lower low
-         if(recentHigh < prevHigh && recentLow < prevLow)
-            return true;
-         else
-            return false;
-      }
-      else
-      {
-         // For Demand zone, check for higher high and higher low
-         if(recentHigh > prevHigh && recentLow > prevLow)
-            return true;
-         else
-            return false;
-      }
-   }
-   
-   return false;
-}
-
 //+------------------------------------------------------------------+
 //| Open Sell Trade                                                   |
 //+------------------------------------------------------------------+
@@ -1693,12 +1622,12 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
       else
          return false; // Not confirming broken zone
    }
-   else if(EarlyBirdEntry(false))
+   else if(EarlyBirdEntry()) // Terbalik
    {
       if(!priceLeftZone)
-         comment = StringFormat("%s_SELL_EB%d_%.2f", InpTradeComment, index, zone.GetTop());
+         comment = StringFormat("%s_SELL_EB%d_%.2f", InpTradeComment, index, zone.GetBottom());
       else
-         comment = StringFormat("%s_SELL_S%d_%.2f", InpTradeComment, index, zone.GetTop());
+         comment = StringFormat("%s_SELL_S%d_%.2f", InpTradeComment, index, zone.GetBottom());
    }
    else
       return false;
@@ -1721,6 +1650,91 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
       loG.Error("[SELL] ERROR: Failed to open SELL - " + g_Trade.ResultRetcodeDescription());
       return false;
    }
+}
+
+//+------------------------------------------------------------------+
+//| Check for broken zone pattern                                    |
+//+------------------------------------------------------------------+
+bool CheckBrokenZone(bool isSupply = true)
+{
+   // Check for new bar
+   datetime currentBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
+   bool isNewBar = (currentBarTime != g_LastCurrBarTime);
+
+   if(isNewBar)
+   {
+      g_LastCurrBarTime = currentBarTime;
+
+      double prevHigh = iHigh(_Symbol, InpZoneTimeframe, 2);
+      double recentHigh = iHigh(_Symbol, InpZoneTimeframe, 1);
+      double prevLow = iLow(_Symbol, InpZoneTimeframe, 2);
+      double recentLow = iLow(_Symbol, InpZoneTimeframe, 1);
+      double prevClose = iClose(_Symbol, InpZoneTimeframe, 2);
+      double recentClose = iClose(_Symbol, InpZoneTimeframe, 1);
+
+      if(isSupply)
+      {
+         // For broken Supply zone, check for bearish engulfing
+         // if(recentHigh > prevHigh && recentLow < prevLow && recentClose < prevClose)
+
+         if(recentLow >= prevLow)
+            return true;
+         else
+            return false;
+      }
+      else
+      {
+         // For broken Demand zone, check for bullish engulfing
+         // if(recentHigh > prevHigh && recentLow < prevLow && recentClose > prevClose)
+
+         // Check if recent low is higher than previous low
+         if(recentHigh <= prevHigh)
+            return true;
+         else
+            return false;
+      }
+   }
+   
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check for early bird entry                                       |
+//+------------------------------------------------------------------+
+bool EarlyBirdEntry(bool isSupply = true)
+{
+   // Check for new bar
+   datetime currentBarTime = iTime(_Symbol, InpZoneTimeframe, 0);
+   bool isNewBar = (currentBarTime != g_LastCurrBarTime);
+
+   if(isNewBar)
+   {
+      g_LastCurrBarTime = currentBarTime;
+
+      double prevHigh = iHigh(_Symbol, InpZoneTimeframe, 2);
+      double recentHigh = iHigh(_Symbol, InpZoneTimeframe, 1);
+      double prevLow = iLow(_Symbol, InpZoneTimeframe, 2);
+      double recentLow = iLow(_Symbol, InpZoneTimeframe, 1);
+
+      if(isSupply)
+      {
+         // For Supply zone, check for lower high and lower low
+         if(recentHigh < prevHigh && recentLow < prevLow)
+            return true;
+         else
+            return false;
+      }
+      else
+      {
+         // For Demand zone, check for higher high and higher low
+         if(recentHigh > prevHigh && recentLow > prevLow)
+            return true;
+         else
+            return false;
+      }
+   }
+   
+   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -2624,8 +2638,10 @@ bool CheckRiskConsistencyRule(string symbol, ENUM_POSITION_TYPE direction, doubl
    
    if(totalRisk > rcrLimit)
    {
-      loG.Warning("[RCR] " + ((direction == POSITION_TYPE_BUY) ? "BUY" : "SELL") + " TRADE BLOCKED! Risking: $" + 
-            DoubleToString(totalRisk, 2) + " > 90% ($" + DoubleToString(rcrLimit, 2) + ") of RCR " + DoubleToString(InpRiskConsistencyPct, 2) + " limit.");
+      loG.Warning("[RCR] " + ((direction == POSITION_TYPE_BUY) ? "BUY" : "SELL") + " TRADE BLOCKED! Risk: $" + 
+            DoubleToString(totalRisk, 2) + " > 90% ($" + DoubleToString(rcrLimit, 2) + ") of max RCR limit ($" + 
+            DoubleToString(actLimit, 2) + ") | Current Trade Risk: $" + DoubleToString(newRisk, 2) + 
+            " | Risk Percentage: " + DoubleToString(riskPct, 2) + "%");
       return false;
    }
    
