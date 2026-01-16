@@ -344,6 +344,7 @@ int OnInit()
    
    // Calculate volume threshold if auto mode
    long volumeThreshold = InpVolumeThreshold;
+
    if(InpAutoVolumeThreshold)
    {
       volumeThreshold = CalculateVolumeThreshold();
@@ -487,9 +488,9 @@ int OnInit()
       {
          g_SDManager.ManageZoneDisplay();
 
-         loG.Info(" Volume-based zone detection complete:");
-         loG.Log("  Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
-         loG.Log("  Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
+         loG.Info("  Volume-based zone detection complete:");
+         loG.Log("   Supply zones: " + IntegerToString(g_SDManager.GetSupplyZoneCount()));
+         loG.Log("   Demand zones: " + IntegerToString(g_SDManager.GetDemandZoneCount()));
       }
    }
 
@@ -553,12 +554,13 @@ int OnInit()
       }
    }
    
-   loG.Info("Supply & Demand EA initialized successfully!");
-   Logging("  Symbol: " + _Symbol);
-   Logging("  Zone Timeframe: " + EnumToString(InpZoneTimeframe));
-   Logging("  Show zones: " + (InpShowZone == -1 ? "All" : (InpShowZone == 0 ? "None" : IntegerToString(InpShowZone) + " closest")));
-   Logging("  Volume threshold: " + DoubleToString(volumeThreshold, 2));
-   Logging("  Auto Trading: " + (InpEnableTrading ? "ENABLED" : "DISABLED"));
+   loG.Info("  Supply & Demand EA initialized successfully!");
+   Logging("   Symbol: " + _Symbol);
+   Logging("   Zone Timeframe: " + EnumToString(InpZoneTimeframe));
+   Logging("   Show zones: " + (InpShowZone == -1 ? "All" : (InpShowZone == 0 ? "None" : IntegerToString(InpShowZone) + " closest")));
+   Logging("   Show Labels: " + (InpShowLabels ? "ENABLED" : "DISABLED"));
+   Logging("   Volume threshold: " + DoubleToString(volumeThreshold, 2));
+   Logging("   Auto Trading: " + (InpEnableTrading ? "ENABLED" : "DISABLED"));
 
    EventSetTimer(1);
    

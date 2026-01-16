@@ -192,7 +192,7 @@ bool CSupplyDemandZone::Create(ENUM_SD_ZONE_TYPE type, int index, int maxPos, do
    
    // Generate object names
    m_zone.rectangleName = GenerateObjectName("Zone ");
-   m_zone.labelName = GenerateObjectName("Label");
+   m_zone.labelName = GenerateObjectName("Label ");
    
    return true;
 }
@@ -479,15 +479,19 @@ void CSupplyDemandZone::Update()
       // Apply alpha channel to fill color
       color fillColorWithAlpha = (color)((alpha << 24) | (fillColor & 0xFFFFFF));
       
-      ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_COLOR, borderColor);
-      ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_BGCOLOR, fillColorWithAlpha);
+      // ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_COLOR, borderColor);
+      // ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_BGCOLOR, fillColorWithAlpha);
       
       // Update border width - thicker for untested zones
       int borderWidth = (m_zone.state == SD_STATE_UNTESTED) ? 2 : 1;
       ObjectSetInteger(m_chartID, m_zone.rectangleName, OBJPROP_WIDTH, borderWidth);
    }
 
-
+   if(ObjectFind(m_chartID, m_zone.labelName) >= 0)
+   {
+      // Update label text to reflect current state
+      DrawLabel();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -573,6 +577,7 @@ public:
    void              UpdateAllZones();
    void              ManageZoneDisplay();
    bool              DetectNewZones(int lookbackBars = 20);  // Detect zones in recent bars only
+   void              SetNewVolumeThreshold(long newThreshold) { m_volumeThreshold = newThreshold; }
    
    // Price action zone detection
    void              DetectPriceActionZones();
@@ -1243,7 +1248,7 @@ void CSupplyDemandManager::UpdateAllZones()
    int initialSupply = ArraySize(m_supplyZones);
    int initialDemand = ArraySize(m_demandZones);
    // Print("[UpdateAllZones START] Supply: " + IntegerToString(initialSupply) + " Demand: " + IntegerToString(initialDemand) + " Price: " + DoubleToString(currentPrice));
-   
+   bool isLogged = false;
    // Update supply zones (backwards to safely delete)
    for(int i = ArraySize(m_supplyZones) - 1; i >= 0; i--)
    {
@@ -1255,7 +1260,7 @@ void CSupplyDemandManager::UpdateAllZones()
          if(m_supplyZones[i].HasPriceBroken(currentPrice))
          {
             // Zone is broken - mark as broken but keep on chart for counter entries
-            // Print("[HasPriceBroken] SUPPLY " + IntegerToString(i+1) + " - MARKED AS BROKEN");
+            Print("[SUPPLY BROKEN]  Zone " + IntegerToString(i+1) + " - MARKED AS BROKEN");
             m_supplyZones[i].SetState(SD_STATE_BROKEN);
             m_supplyZones[i].Update();
 
@@ -1266,6 +1271,7 @@ void CSupplyDemandManager::UpdateAllZones()
             // Check if zone has been broken for longer than valid time
             if((currentTime - m_supplyZones[i].GetTimeStart()) > validSeconds)
             {
+               Print("[SUPPLY BROKEN] Zone " + IntegerToString(i+1) + " - DELETED. Zone over " + IntegerToString(validSeconds/3600) + " hours");
                canDelete = true;
             }
 
@@ -1283,14 +1289,21 @@ void CSupplyDemandManager::UpdateAllZones()
             else if(m_supplyZones[i].CanEnter())
             {
                // // Check for confirmation (price moving away from zone)
+               Print("[SUPPLY BROKEN]   Initiating BUY from broken Zone " + IntegerToString(i+1));
                if(OpenBuyTrade(m_supplyZones[i]))
                   m_supplyZones[i].IncrementEntry();
+               else
+                  Print("[SUPPLY BROKEN]   BUY trade from broken Zone " + IntegerToString(i+1) + " FAILED");
             }
             else
+            {
                canDelete = true;
+               Print("[SUPPLY BROKEN] Zone " + IntegerToString(i+1) + " - DELETING due to max entries reached");
+            }
 
             if(canDelete)
             {               
+               Print("[SUPPLY BROKEN] Zone " + IntegerToString(i+1) + " - DELETING");
                // Delete zone after entry
                delete m_supplyZones[i];
                
@@ -1311,37 +1324,43 @@ void CSupplyDemandManager::UpdateAllZones()
                if(m_supplyZones[i].GetZoneData().priceHasLeft)
                {
                   // Price returned after leaving - NOW draw entry arrow and open trade
-                  // Print("[IsPriceTouching] SUPPLY ", i+1, " RETURN after leaving | Price=", currentPrice, " Bottom=", m_supplyZones[i].GetBottom(), " Top=", m_supplyZones[i].GetTop());
+                  Print("[SUPPLY RETURN]  Zone " + IntegerToString(i+1) + " RETURN after leaving. Zone is ACTIVE for trade.");
                   
                   // Open SELL trade for supply zone
-                  // if(m_supplyZones[i].GetTouchCount() < 5) // Example volume check
-                  OpenSellTrade(m_supplyZones[i]);
+                  if(OpenSellTrade(m_supplyZones[i]))
+                  {
+                     m_supplyZones[i].IncrementEntry();
+                     Print("[SUPPLY RETURN]  Zone " + IntegerToString(i+1) + " Trade opened successfully.");
+                  }
 
                   m_supplyZones[i].SetState(SD_STATE_ACTIVE);
                }
                else
                {
                   // Price still in zone from formation - wait for it to leave first
-                  // Print("[IsPriceTouching] SUPPLY ", i+1, " Still in zone from formation - waiting for exit");
+                  Print("[FRESH SUPPLY]  Zone " + IntegerToString(i+1) + " Still in zone from formation - waiting for exit");
                }
             }
             else if(m_supplyZones[i].GetState() == SD_STATE_TESTED)
             {
                // Weak zone - only trade if enabled
-               // Print("[IsPriceTouching] SUPPLY ", i+1, " WEAK zone return | Price=", currentPrice);
+               Print("[WEAK SUPPLY]  Zone " + IntegerToString(i+1) + " WEAK zone return. Ready for next trade.");
                
                // Open SELL trade for weak supply zone (only if weak zone trading enabled)
                if(m_enableTradeOnWeakZone)
                {
-                  // if(m_supplyZones[i].GetTouchCount() < 5) // Example volume check
-                  OpenSellTrade(m_supplyZones[i]);
-
+                  if(OpenSellTrade(m_supplyZones[i]))
+                  {
+                     m_supplyZones[i].IncrementEntry();
+                     Print("[WEAK SUPPLY]  Zone " + IntegerToString(i+1) + " Trade opened successfully.");
+                  }
                   m_supplyZones[i].SetState(SD_STATE_ACTIVE);
                }
             }
             else
             {
                m_supplyZones[i].SetState(SD_STATE_ACTIVE);
+               Print("[SUPPLY ACTIVE/TESTED] Zone " + IntegerToString(i+1) + " Price still touching active zone.");
             }
          }
          else
@@ -1399,18 +1418,25 @@ void CSupplyDemandManager::UpdateAllZones()
                {
                   // Mark that price has left the zone for the first time
                   m_supplyZones[i].SetPriceHasLeft(true);
-
-                  // Print("[UpdateAllZones] SUPPLY ", i+1, " Price LEFT zone - now validated (distance: ", 
-                  //      DoubleToString(((zoneTop - currentPrice) / point), 0), " points, required: ", DoubleToString((minDistance / point), 0), " points)");
+                  Print("[STRONG SUPPLY] Price is lefting Zone " + IntegerToString(i+1) + " - now validated (Distance: ", 
+                        (zoneTop - currentPrice) / point, " points, Required: ", minDistance / point, " points)");
                }
             }
             
             if(m_supplyZones[i].GetState() == SD_STATE_ACTIVE)
             {
                // Price has left an active zone - mark as tested
+               if(!isLogged)
+               {
+                  Print("[UNKNOW SUPPLY] Zone " + IntegerToString(i+1) + " - Checking zone...");
+                  isLogged = true;
+               }
+               Print("[UNKNOW SUPPLY] Zone " + IntegerToString(i+1) + " Price has left active zone - marking as TESTED.");
                m_supplyZones[i].SetState(SD_STATE_TESTED);
                m_supplyZones[i].IncrementTouch();
             }
+            else
+               isLogged = false;
          }
          
          bool isBroken = m_supplyZones[i].GetState() == SD_STATE_BROKEN;
@@ -1420,11 +1446,22 @@ void CSupplyDemandManager::UpdateAllZones()
          {
             if(m_supplyZones[i].CanEnter())
             {
+               if(!isLogged)
+               {
+                  Print("[EARLY BIRD SUPPLY]   Initiating early SELL from active Zone " + IntegerToString(i+1));
+                  isLogged = true;
+               }
+
                if(OpenSellTrade(m_supplyZones[i]))
                   m_supplyZones[i].IncrementEntry();
-
-               // Print("[UpdateAllZones] SUPPLY ", i+1, " Trade opened early bird entry.");
+               else
+               {
+                  isLogged = false;
+                  Print("[EARLY BIRD SUPPLY]  Zone " + IntegerToString(i+1) + " Trade failed to open.");
+               }
             }
+            else
+               isLogged = false;
          }
          m_supplyZones[i].Update();
       }
@@ -1444,7 +1481,7 @@ void CSupplyDemandManager::UpdateAllZones()
          if(m_demandZones[i].HasPriceBroken(currentPrice))
          {
             // Zone is broken - mark as broken but keep on chart for counter entries
-            // Print("[HasPriceBroken] DEMAND ", i+1, " - MARKED AS BROKEN");
+            Print("[DEMAND BROKEN]  Zone " + IntegerToString(i+1) + " - MARKED AS BROKEN");
             m_demandZones[i].SetState(SD_STATE_BROKEN);
             m_demandZones[i].Update();
 
@@ -1457,6 +1494,7 @@ void CSupplyDemandManager::UpdateAllZones()
             if((currentTime - m_demandZones[i].GetTimeStart()) > validSeconds)
             {
                canDelete = true;
+               Print("[DEMAND BROKEN] Zone " + IntegerToString(i+1) + " - DELETING due to time expiry");
             }
 
             double prevHigh = iHigh(m_symbol, PERIOD_CURRENT, 1);
@@ -1468,19 +1506,27 @@ void CSupplyDemandManager::UpdateAllZones()
             if(recentClose > prevClose && recentHigh > prevHigh)
             {
                canDelete = true;
+               Print("[DEMAND BROKEN] Zone " + IntegerToString(i+1) + " - DELETING due to confirmed uptrend");
             }
             // Only open trade if entry limit not reached
             else if(m_demandZones[i].CanEnter())
             {
                // // Check for confirmation (price moving away from zone)
+               Print("[DEMAND BROKEN]   Initiating SELL from broken Zone " + IntegerToString(i+1));
                if(OpenSellTrade(m_demandZones[i]))
                   m_demandZones[i].IncrementEntry();
+               else
+                  Print("[DEMAND BROKEN]   SELL trade from broken Zone " + IntegerToString(i+1) + " FAILED");
             }
             else
+            {
                canDelete = true;
+               Print("[DEMAND BROKEN] Zone " + IntegerToString(i+1) + " - DELETING due to max entries reached");
+            }
 
             if(canDelete)
             {               
+               Print("[DEMAND BROKEN] Zone " + IntegerToString(i+1) + " - DELETING");
                // Delete zone after entry
                delete m_demandZones[i];
                
@@ -1501,30 +1547,40 @@ void CSupplyDemandManager::UpdateAllZones()
                if(m_demandZones[i].GetZoneData().priceHasLeft)
                {
                   // Price returned after leaving - NOW draw entry arrow and open trade
-                  // Print("[IsPriceTouching] DEMAND ", i+1, " RETURN after leaving | Price=", currentPrice, " Bottom=", m_demandZones[i].GetBottom(), " Top=", m_demandZones[i].GetTop());
-                  
+                  Print("[SUPPLY RETURN]  Zone " + IntegerToString(i+1) + " RETURN after leaving. Zone is ACTIVE for trade.");
+
                   // Open BUY trade for demand zone
-                  // if(m_demandZones[i].GetTouchCount() < 5) // Example volume check
-                  OpenBuyTrade(m_demandZones[i]);
+                  if(OpenBuyTrade(m_demandZones[i]))
+                  {
+                     m_demandZones[i].IncrementEntry();
+                     Print("[DEMAND RETURN]  Zone " + IntegerToString(i+1) + " Trade opened successfully.");
+                  }
+                  else
+                     Print("[DEMAND RETURN]  Zone " + IntegerToString(i+1) + " Trade failed to open.");
 
                   m_demandZones[i].SetState(SD_STATE_ACTIVE);
                }
                else
                {
                   // Price still in zone from formation - wait for it to leave first
-                  // Print("[IsPriceTouching] DEMAND ", i+1, " Still in zone from formation - waiting for exit");
+                  Print("[FRESH DEMAND]  Zone " + IntegerToString(i+1) + " Still in zone from formation - waiting for exit");
                }
             }
             else if(m_demandZones[i].GetState() == SD_STATE_TESTED)
             {
                // Weak zone - only trade if enabled
-               // Print("[IsPriceTouching] DEMAND ", i+1, " WEAK zone return | Price=", currentPrice);
+               Print("[WEAK DEMAND]  Zone " + IntegerToString(i+1) + " WEAK zone return. Ready for next trade.");
                
                // Open BUY trade for weak demand zone (only if weak zone trading enabled)
                if(m_enableTradeOnWeakZone)
                {
-                  // if(m_demandZones[i].GetTouchCount() < 5) // Example volume check
-                  OpenBuyTrade(m_demandZones[i]);
+                  if(OpenBuyTrade(m_demandZones[i]))
+                  {
+                     m_demandZones[i].IncrementEntry();
+                     Print("[WEAK DEMAND]  Zone " + IntegerToString(i+1) + " Trade opened successfully.");
+                  }
+                  else
+                     Print("[WEAK DEMAND]  Zone " + IntegerToString(i+1) + " Trade failed to open.");
 
                   m_demandZones[i].SetState(SD_STATE_ACTIVE);
                }
@@ -1532,6 +1588,7 @@ void CSupplyDemandManager::UpdateAllZones()
             else
             {
                m_demandZones[i].SetState(SD_STATE_ACTIVE);
+               Print("[DEMAND ACTIVE/TESTED] Zone " + IntegerToString(i+1) + " Price still touching active zone.");
             }
          }               
          else
@@ -1589,19 +1646,25 @@ void CSupplyDemandManager::UpdateAllZones()
                {
                   // Mark that price has left the zone for the first time
                   m_demandZones[i].SetPriceHasLeft(true);
-
-
-                  // Print("[UpdateAllZones] DEMAND ", i+1, " Price LEFT zone - now validated (distance: ", 
-                  //      DoubleToString(((currentPrice - zoneBottom) / point), 0), " points, required: ", DoubleToString((minDistance / point), 0), " points)");
+                  Print("[STRONG DEMAND] Price is lefting Zone " + IntegerToString(i+1) + " - now validated (Distance: ", 
+                        (currentPrice - zoneBottom) / point, " points, Required: ", minDistance / point, " points)");
                }
             }
             
             if(m_demandZones[i].GetState() == SD_STATE_ACTIVE)
             {
                // Price has left an active zone - mark as tested
+               if(!isLogged)
+               {
+                  Print("[ACTIVE DEMAND] Zone " + IntegerToString(i+1) + " - Checking zone...");
+                  isLogged = true;
+               }
+               Print("[TESTED DEMAND] Zone " + IntegerToString(i+1) + " Price has left active zone - marking as TESTED.");
                m_demandZones[i].SetState(SD_STATE_TESTED);
                m_demandZones[i].IncrementTouch();
             }
+            else
+               isLogged = false;
          }
          
          bool isBroken = m_demandZones[i].GetState() == SD_STATE_BROKEN;
@@ -1612,11 +1675,19 @@ void CSupplyDemandManager::UpdateAllZones()
             // Price is away from zone and zone is active - can open trade
             if(m_demandZones[i].CanEnter())
             {
+               if(!isLogged)
+               {
+                  Print("[EARLY BIRD DEMAND]   Initiating early BUY from active Zone " + IntegerToString(i+1));
+                  isLogged = true;
+               }
+
                if(OpenBuyTrade(m_demandZones[i]))
                   m_demandZones[i].IncrementEntry();
-
-               // Print("[UpdateAllZones] DEMAND ", i+1, " Trade opened early bird entry.");
+               else
+                  Print("[EARLY BIRD DEMAND]  Zone " + IntegerToString(i+1) + " Trade failed to open.");
             }
+            else
+               isLogged = false;
          }
          m_demandZones[i].Update();
       }
