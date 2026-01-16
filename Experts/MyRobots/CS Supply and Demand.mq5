@@ -675,7 +675,15 @@ void OnTick()
       g_LastInpBarTime = currentBarTime;
       
       if(InpUpdateOnNewBar)
-      {
+      {   
+         // Calculate volume threshold if auto mode
+         long volumeThreshold = InpVolumeThreshold;
+
+         if(InpAutoVolumeThreshold)
+            volumeThreshold = CalculateVolumeThreshold();
+
+         // Update threshold in manager
+         g_SDManager.SetNewVolumeThreshold(volumeThreshold);
          // Detect new zones on new bar
          if(InpDetectZoneByVolume)
             g_SDManager.DetectNewZones(20);
@@ -756,6 +764,9 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   g_SDManager.UpdateCurrentPrice(currentPrice);
    // Optional: Additional periodic updates
    // if(g_SDManager != NULL)
    // {
@@ -840,6 +851,8 @@ bool CheckSupplyZoneEntry(CSupplyDemandZone *zone)
       return false;
    
    // TODO: Implement supply zone entry logic
+   if(zone.GetEntryCount() == 0)
+      return true;
    // - Check if price is touching zone
    // - Check zone state (prefer UNTESTED)
    // - Check for rejection patterns
@@ -854,6 +867,8 @@ bool CheckDemandZoneEntry(CSupplyDemandZone *zone)
       return false;
    
    // TODO: Implement demand zone entry logic
+   if(zone.GetEntryCount() == 0)
+      return true;
    // - Check if price is touching zone
    // - Check zone state (prefer UNTESTED)
    // - Check for bounce patterns
@@ -901,6 +916,8 @@ void ManageTrailing()
       
       double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
       double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+
+      string comment = PositionGetString(POSITION_COMMENT);
       
       bool modified = false;
       double newSL = posSL;
@@ -988,9 +1005,17 @@ void ManageTrailing()
       
       // Trailing Stop Logic
       if(InpEnableTrailingStop)
-      {
-         double trailDistance = InpTrailingStopDistance * point;
-         double trailStep = InpTrailingStopStep * point;
+      {      
+         double multiplier = 0.0;
+         int eq_pos = StringFind(comment, "First");
+
+         if(eq_pos == -1)
+            multiplier = 1.0;
+         else
+            multiplier = 2.0;
+
+         double trailDistance = InpTrailingStopDistance * multiplier * point;
+         double trailStep = InpTrailingStopStep * multiplier * point;
          
          if(posType == POSITION_TYPE_BUY)
          {
@@ -1517,31 +1542,23 @@ bool OpenBuyTrade(CSupplyDemandZone *zone)
    
    string comment;
    bool isBroken = (zone.GetState() == SD_STATE_BROKEN);
-   bool priceLeftZone = zone.GetZoneData().priceHasLeft;
+   bool isEarlyPromo = zone.GetZoneData().earlyBirdPromo;
+   bool isFirstTime = zone.GetEntryCount() == 0;
 
    if(isBroken)
-   {
-      if(CheckBrokenZone())
-         comment = StringFormat("%s_BUY_S%d_BROKEN_%.2f", InpTradeComment, index, zone.GetTop());
-      else
-         return false; // Not confirming broken zone
-   }
-   else if(EarlyBirdEntry(false))
-   {
-      if(!priceLeftZone)
-         comment = StringFormat("%s_BUY_EB%d_%.2f", InpTradeComment, index, zone.GetTop());
-      else
-         comment = StringFormat("%s_BUY_D%d_%.2f", InpTradeComment, index, zone.GetTop());
-   }
+      comment = StringFormat("%s_BUY_BrokenS%d", InpTradeComment, index);
+   else if(isEarlyPromo)
+      comment = StringFormat("%s_BUY_EarlyD%d", InpTradeComment, index);
+   else if(isFirstTime)
+      comment = StringFormat("%s_BUY_FirstD%d", InpTradeComment, index);
    else
-      return false;
-      
+      comment = StringFormat("%s_BUY_D%d", InpTradeComment, index);
    // if(InpDebugMode)
    //    Print("[OpenBuyTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
    
    if(g_Trade.Buy(InpLotSize, _Symbol, price, sl, tp, comment))
    {
-      loG.Info("[BUY] on " + ((zone.GetState() == SD_STATE_BROKEN) ? "broken Supply": "Demand") + " Zone " + IntegerToString(index) + "\n" + GetZoneInfo(zone));
+      loG.Info("[BUY] on " + ((zone.GetState() == SD_STATE_BROKEN) ? "Broken Supply": "Demand") + " Zone " + IntegerToString(index) + "\n" + GetZoneInfo(zone));
       // loG.Info("  🟢 BUY order opened: Ticket: " + IntegerToString(g_Trade.ResultOrder()) + 
       //       " Entry: " + DoubleToString(price, _Digits) + " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
       // loG.Info("[BUY] Checking middle band: " + DoubleToString(GetBollingerBand(0), _Digits));
@@ -1632,31 +1649,24 @@ bool OpenSellTrade(CSupplyDemandZone *zone)
    
    string comment;
    bool isBroken = (zone.GetState() == SD_STATE_BROKEN);
-   bool priceLeftZone = zone.GetZoneData().priceHasLeft;
+   bool isEarlyPromo = zone.GetZoneData().earlyBirdPromo;
+   bool isFirstTime = zone.GetEntryCount() == 0;
 
    if(isBroken)
-   {
-      if(CheckBrokenZone(false))
-         comment = StringFormat("%s_SELL_D%d_BROKEN_%.2f", InpTradeComment, index, zone.GetBottom());
-      else
-         return false; // Not confirming broken zone
-   }
-   else if(EarlyBirdEntry()) // Terbalik
-   {
-      if(!priceLeftZone)
-         comment = StringFormat("%s_SELL_EB%d_%.2f", InpTradeComment, index, zone.GetBottom());
-      else
-         comment = StringFormat("%s_SELL_S%d_%.2f", InpTradeComment, index, zone.GetBottom());
-   }
+      comment = StringFormat("%s_SELL_BrokenD%d", InpTradeComment, index);
+   else if(isEarlyPromo) // Terbalik
+      comment = StringFormat("%s_SELL_EarlyS%d", InpTradeComment, index);
+   else if(isFirstTime)
+      comment = StringFormat("%s_SELL_FirstS%d", InpTradeComment, index);
    else
-      return false;
+      comment = StringFormat("%s_SELL_S%d", InpTradeComment, index);
    
    // if(InpDebugMode)
    //    Print("[OpenSellTrade] Entry=", price, " SL=", sl, " TP=", tp, " ATR=", atr);
    
    if(g_Trade.Sell(InpLotSize, _Symbol, price, sl, tp, comment))
    {
-      loG.Info("[SELL] on " + ((zone.GetState() == SD_STATE_BROKEN) ? "broken Demand": "Supply") + " Zone " + IntegerToString(index) + "\n" + GetZoneInfo(zone));
+      loG.Info("[SELL] on " + ((zone.GetState() == SD_STATE_BROKEN) ? "Broken Demand": "Supply") + " Zone " + IntegerToString(index) + "\n" + GetZoneInfo(zone));
       // loG.Info("  🔴 SELL order opened: Ticket: " + IntegerToString(g_Trade.ResultOrder()) +
       //       " Entry: " + DoubleToString(price, _Digits) + " SL: " + DoubleToString(sl, _Digits) + " TP: " + DoubleToString(tp, _Digits));
       // loG.Info("[SELL] Checking middle band: " + DoubleToString(GetBollingerBand(0), _Digits));
